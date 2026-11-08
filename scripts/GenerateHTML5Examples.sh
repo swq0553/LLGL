@@ -37,7 +37,7 @@ fi
 
 EMSCRIPTEN_FILE_PACKAGER="$EMSDK/upstream/emscripten/tools/file_packager"
 
-# Copys the input file to the output and removes '\r' EOL characters from text files.
+# Copies the input file to the output and removes '\r' EOL characters from text files.
 # Web page will run on Linux server and Git must not convert EOL for this output file.
 # Otherwise, data offsets in the *.data.js script won't match with the *.data file after Git uploaded it.
 copy_file_preserve_linux_eol()
@@ -87,11 +87,26 @@ generate_html5_page()
         cp "$BIN_ROOT/$BASE_FILENAME.worker.js" "$HTML5_ROOT/$BASE_FILENAME.worker.js"
     fi
 
-    # Replace meta data
-    sed -e "s/LLGL_EXAMPLE_NAME/${CURRENT_PROJECT}/g" \
-        -e "s/LLGL_EXAMPLE_PROJECT/Example_${CURRENT_PROJECT}/g" \
-        "$SOURCE_DIR/examples/Shared/Platform/Wasm/index.html" > "$HTML5_ROOT/index.html"
-    
+    # Determine which index.html file to copy (from shared folder or project-specific folder)
+    if [ -f "$PROJECT_SOURCE_DIR/Platform/Wasm/index.html" ] || [ -f "$PROJECT_SOURCE_DIR/Platform/Wasm/Standalone/index.html" ]; then
+        # Copy all files from the Wasm project-specific folder
+        for FILE in "$PROJECT_SOURCE_DIR/Platform/Wasm/"*; do
+            if [ -f "$FILE" ]; then
+                cp "$FILE" "$HTML5_ROOT/$(basename $FILE)"
+            fi
+        done
+        for FILE in "$PROJECT_SOURCE_DIR/Platform/Wasm/Standalone/"*; do
+            if [ -f "$FILE" ]; then
+                cp "$FILE" "$HTML5_ROOT/$(basename $FILE)"
+            fi
+        done
+    else
+        # Copy index.html template and Replace meta data
+        sed -e "s/LLGL_EXAMPLE_NAME/${CURRENT_PROJECT}/g" \
+            -e "s/LLGL_EXAMPLE_PROJECT/Example_${CURRENT_PROJECT}/g" \
+            "$SOURCE_DIR/examples/Shared/Platform/Wasm/Standalone/index.html" > "$HTML5_ROOT/index.html"
+    fi
+
     # Find all required assets in *.assets.txt file of respective project directory and copy them into app folder
     ASSET_DIR="$HTML5_ROOT/assets"
     mkdir -p "$ASSET_DIR"
@@ -122,11 +137,14 @@ generate_html5_page()
     fi
 
     # Find all shaders and copy them into app folder
-    for FILE in $PROJECT_SOURCE_DIR/*.vert \
-                $PROJECT_SOURCE_DIR/*.frag; do
-        if [ -f "$FILE" ]; then
-            copy_file_preserve_linux_eol "$FILE" "$ASSET_DIR/$(basename $FILE)"
-        fi
+    for SHADER_DIR in "$PROJECT_SOURCE_DIR" \
+                      "$PROJECT_SOURCE_DIR/.autogen"; do
+        for FILE in "$SHADER_DIR"/*.300es.vert \
+                    "$SHADER_DIR"/*.300es.frag; do
+            if [ -f "$FILE" ]; then
+                copy_file_preserve_linux_eol "$FILE" "$ASSET_DIR/$(basename $FILE)"
+            fi
+        done
     done
 
     # Package assets into .data.js file with Emscripten packager tool
@@ -137,9 +155,14 @@ BIN_FILE_BASE="${TARGET_DIR}/build/Example_"
 BIN_FILE_BASE_LEN=${#BIN_FILE_BASE}
 
 if [ $DEBUG_BUILD -ne 0 ]; then
+    # Only include debug build files (*D.wasm) in Debug build
     EXAMPLE_BIN_FILES=(${BIN_FILE_BASE}*D.wasm)
 else
-    EXAMPLE_BIN_FILES=(${BIN_FILE_BASE}*.wasm)
+    # Exclude debug build files (*D.wasm) from Release build
+    EXAMPLE_BIN_FILES=()
+    for FILE in "${BIN_FILE_BASE}"*.wasm; do
+        [[ "$FILE" == *D.wasm ]] || EXAMPLE_BIN_FILES+=( "$FILE" )
+    done
 fi
 
 for BIN_FILE in ${EXAMPLE_BIN_FILES[@]}; do

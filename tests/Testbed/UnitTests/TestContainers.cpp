@@ -5,6 +5,10 @@
  * Licensed under the terms of the BSD 3-Clause license (see LICENSE.txt).
  */
 
+#if _MSC_VER
+#pragma warning(disable: 4996)
+#endif
+
 #include "Testbed.h"
 #include <LLGL/Container/DynamicArray.h>
 #include <LLGL/Container/SmallVector.h>
@@ -244,7 +248,7 @@ DEF_RITEST( ContainerSmallVector )
 
 DEF_RITEST( ContainerUTF8String )
 {
-    // Test UTF8String concatentation
+    // Test UTF8String concatenation
     UTF8String sa1 = "Hello";
     UTF8String sa2 = " ";
     UTF8String sa3 = "World";

@@ -13,6 +13,7 @@
 #include <LLGL/RenderSystemFlags.h>
 #include "../VideoAdapter.h"
 #include <LLGL/ImageFlags.h>
+#include <LLGL/Blob.h>
 #include "ComPtr.h"
 #include <dxgi.h>
 #include <string>
@@ -54,17 +55,20 @@ std::string DXGetBlobString(ID3DBlob* blob);
 // Returns the blob data as char vector.
 std::vector<char> DXGetBlobData(ID3DBlob* blob);
 
-// Returns a blob and copies the specified data into the blob.
+// Returns an ID3DBlob object and copies the specified data into the blob.
 ComPtr<ID3DBlob> DXCreateBlob(const void* data, std::size_t size);
 
-// Returns a blob and copies the specified data into the blob.
-ComPtr<ID3DBlob> DXCreateBlob(const std::vector<char>& data);
+// Returns an ID3DBlob object and copies the specified data into the blob.
+ComPtr<ID3DBlob> DXCreateBlob(const Blob& inBlob);
 
-// Returns a blob that was created from a resource (*.rc files).
+// Returns an ID3DBlob object that was created from a resource (*.rc files).
 ComPtr<ID3DBlob> DXCreateBlobFromResource(int resourceID);
 
 // Returns the default list of supported D3D texture formats.
-void DXGetDefaultSupportedTextureFormats(Format* outFormats, std::size_t* outNumFormats);
+void DXGetDefaultSupportedTextureFormats(std::vector<Format>& formats);
+
+// Returns the default list of supported D3D vertex formats.
+std::vector<Format> GetSupportedDXVertexFormats();
 
 // Returns the compiler flags for the 'ShaderCompileFlags' enumeration values for the DirectX Effects Compiler (FXC).
 UINT DXGetFxcCompilerFlags(int flags);
@@ -73,13 +77,16 @@ UINT DXGetFxcCompilerFlags(int flags);
 void DXConvertVideoAdapterInfo(IDXGIAdapter* adapter, const DXGI_ADAPTER_DESC& inDesc, VideoAdapterInfo& outInfo);
 
 // Returns the video adapter descriptor from the specified DXGI adapter.
-VideoAdapterInfo DXGetVideoAdapterInfo(IDXGIFactory* factory, long preferredAdapterFlags = 0, IDXGIAdapter** outPreferredAdatper = nullptr);
+VideoAdapterInfo DXGetVideoAdapterInfo(IDXGIFactory* factory, long preferredAdapterFlags = 0, IDXGIAdapter** outPreferredAdapter = nullptr);
 
 // Returns the format for the specified signature parameter type (by its component type and mask).
 Format DXGetSignatureParameterType(D3D_REGISTER_COMPONENT_TYPE componentType, BYTE componentMask);
 
-// Returns a suitable DXGI format for the specified depth-stencil mode.
-DXGI_FORMAT DXPickDepthStencilFormat(int depthBits, int stencilBits);
+/*
+Returns a suitable DXGI format for the specified depth-stencil mode.
+If 'depthStencilFormat' is Format::Undefined, the format is deduced from the deprecated depth/stencil bit sizes.
+*/
+DXGI_FORMAT DXPickDepthStencilFormat(Format depthStencilFormat, int depthBits, int stencilBits);
 
 // Returns true if the specified DXGI swap-chain is in fullscreen mode.
 bool DXGetFullscreenState(IDXGISwapChain* swapChain);

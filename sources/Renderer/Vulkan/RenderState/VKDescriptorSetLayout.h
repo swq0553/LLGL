@@ -19,6 +19,8 @@
 namespace LLGL
 {
 
+
+class VKSanitizeBindingSlotContext;
     
 struct VKLayoutBinding
 {
@@ -45,10 +47,12 @@ class VKDescriptorSetLayout
 
     public:
 
-        void Initialize(VkDevice device, std::vector<VkDescriptorSetLayoutBinding>&& setLayoutBindings);
+        void Initialize(VkDevice device, std::vector<VkDescriptorSetLayoutBinding>&& setLayoutBindings, VKSanitizeBindingSlotContext& sanitizeContext);
 
+        #if 0//UNUSED
         void UpdateLayoutBindingType(std::uint32_t descriptorIndex, VkDescriptorType descriptorType);
         void FinalizeUpdateLayoutBindingTypes(VkDevice device);
+        #endif
 
         void GetLayoutBindings(std::vector<VKLayoutBinding>& outBindings) const;
 
@@ -76,16 +80,13 @@ class VKDescriptorSetLayout
 
     private:
 
-        // Modifies binding slots that overlap with others since Vulkan needs to have unique binding slots within the same descriptor set.
-        void SanitizeBindingSlots();
-
         void CreateVkDescriptorSetLayout(VkDevice device);
 
     private:
 
         VKPtr<VkDescriptorSetLayout>                setLayout_;
         std::vector<VkDescriptorSetLayoutBinding>   setLayoutBindings_;
-        bool                                        isAnyDescriptorTypeDirty_   = false;
+      //bool                                        isAnyDescriptorTypeDirty_   = false; //UNUSED
 
 };
 

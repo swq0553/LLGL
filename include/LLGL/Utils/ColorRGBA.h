@@ -76,6 +76,15 @@ class LLGL_EXPORT Color<T, 4u>
         {
         }
 
+        //! Constructs the RGB attributes with the specified RGB color, and the separate alpha value.
+        Color(const Color<T, 3u>& rhs, const T& a) :
+            r { rhs.r },
+            g { rhs.g },
+            b { rhs.b },
+            a { a     }
+        {
+        }
+
         /**
         \brief Constructs the RGB attributes with the specified color values r (red), g (green), b (blue), and the default value for alpha.
         \remarks For default color values the 'MaxColorValue' template is used.
@@ -117,7 +126,7 @@ class LLGL_EXPORT Color<T, 4u>
             return *this;
         }
 
-        //! Substracts the specified color (component wise) from this color.
+        //! Subtracts the specified color (component wise) from this color.
         Color<T, 4>& operator -= (const Color<T, 4>& rhs)
         {
             r -= rhs.r;

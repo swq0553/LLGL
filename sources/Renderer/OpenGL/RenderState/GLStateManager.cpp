@@ -10,10 +10,13 @@
 #include "GLDepthStencilState.h"
 #include "GLRasterizerState.h"
 #include "GLBlendState.h"
+#include "GLPipelineState.h"
+#include "../Platform/GLDriverBugMitigation.h"
 #include "../Shader/GLShaderProgram.h"
 #include "../GLSwapChain.h"
 #include "../Buffer/GLBuffer.h"
 #include "../Buffer/GLBufferWithXFB.h"
+#include "../Buffer/GLVertexArrayCache.h"
 #include "../Texture/GLTexture.h"
 #include "../Texture/GLRenderTarget.h"
 #include "../Texture/GLEmulatedSampler.h"
@@ -57,7 +60,8 @@ static const GLenum g_stateCapsEnum[] =
     GL_DITHER,
     GL_POLYGON_OFFSET_FILL,
 
-    #ifdef GL_PRIMITIVE_RESTART_FIXED_INDEX
+    // GL_PRIMITIVE_RESTART_FIXED_INDEX is not supported on WebGL, but Emscripten defines this through <GLES3/gl3.h>.
+    #if defined(GL_PRIMITIVE_RESTART_FIXED_INDEX) && !LLGL_WEBGL
     GL_PRIMITIVE_RESTART_FIXED_INDEX,
     #else
     0,
@@ -229,6 +233,13 @@ static const GLenum g_textureLayersEnum[] =
  * Internal functions
  */
 
+/*
+The following constant acts as special value for GLStateManager's context state cache. The actual GL state will never have this value.
+When objects get deleted, GLStateManager sets cache entries that reference the deleted object to this invalid ID.
+Alternatively, the deleted objects would have to be explicitly unbound, but GLStateManager avoids extra GL calls and simply resets its cache entries to this special value.
+This value ensures that stale cache entries are flushed regardless of whether a previously deleted ID has been recycled by the GL implementation.
+This value must be considered when comparing current GL state against GLStateManager's cache via GLGetContextState().
+*/
 static constexpr GLuint k_invalidGLID = UINT_MAX;
 
 static void InvalidateBoundGLObject(GLuint& boundId, const GLuint releasedObjectId)
@@ -261,7 +272,8 @@ struct GLStateManager::GLFramebufferClearState
  * GLStateManager class
  */
 
-GLStateManager::GLStateManager()
+GLStateManager::GLStateManager(GLContext* context) :
+    context_ { context }
 {
     /* Make this the active state manager if there is no previous one */
     if (GLStateManager::current_ == nullptr)
@@ -326,6 +338,7 @@ void GLStateManager::ClearCache()
     boundRasterizerState_       = nullptr;
     boundBlendState_            = nullptr;
     frontFacingDirtyBit_        = false;
+    deferredShaderPipeline_     = {};
 }
 
 void GLStateManager::Set(GLState state, bool value)
@@ -1155,6 +1168,8 @@ void GLStateManager::NotifyBufferRelease(const GLBuffer& buffer)
     NotifyBufferRelease(id, GLBufferTarget::CopyReadBuffer);
     NotifyBufferRelease(id, GLBufferTarget::CopyWriteBuffer);
     NotifyBufferRelease(id, buffer.GetTarget());
+
+    GLVertexArrayCache::Get().NotifyBufferRelease(buffer);
 }
 
 void GLStateManager::DisableVertexAttribArrays(GLuint firstIndex)
@@ -1187,12 +1202,27 @@ void GLStateManager::BindGLRenderTarget(GLRenderTarget* renderTarget)
 void GLStateManager::BindFramebuffer(GLFramebufferTarget target, GLuint framebuffer)
 {
     #if LLGL_GLEXT_FRAMEBUFFER_OBJECT
-    /* Only bind framebuffer if the framebuffer has changed */
-    auto targetIdx = static_cast<std::size_t>(target);
-    if (contextState_.boundFramebuffers[targetIdx] != framebuffer)
+    if (target == GLFramebufferTarget::Framebuffer)
     {
-        contextState_.boundFramebuffers[targetIdx] = framebuffer;
-        glBindFramebuffer(g_framebufferTargetsEnum[targetIdx], framebuffer);
+        /* GL_FRAMEBUFFER binds both draw and read framebuffers */
+        GLuint& boundDrawFramebuffer = contextState_.boundFramebuffers[static_cast<std::size_t>(GLFramebufferTarget::DrawFramebuffer)];
+        GLuint& boundReadFramebuffer = contextState_.boundFramebuffers[static_cast<std::size_t>(GLFramebufferTarget::ReadFramebuffer)];
+        if (boundDrawFramebuffer != framebuffer || boundReadFramebuffer != framebuffer)
+        {
+            boundDrawFramebuffer = framebuffer;
+            boundReadFramebuffer = framebuffer;
+            glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+        }
+    }
+    else
+    {
+        /* Only bind framebuffer if the framebuffer has changed */
+        auto targetIdx = static_cast<std::size_t>(target);
+        if (contextState_.boundFramebuffers[targetIdx] != framebuffer)
+        {
+            contextState_.boundFramebuffers[targetIdx] = framebuffer;
+            glBindFramebuffer(g_framebufferTargetsEnum[targetIdx], framebuffer);
+        }
     }
     #endif
 }
@@ -1219,8 +1249,12 @@ void GLStateManager::PopBoundFramebuffer()
 
 void GLStateManager::NotifyFramebufferRelease(GLuint framebuffer)
 {
+    /* Deleting a bound framebuffer reverts its binding to the default framebuffer (0), so track that instead of an invalid ID */
     for (GLuint& boundFramebuffer : contextState_.boundFramebuffers)
-        InvalidateBoundGLObject(boundFramebuffer, framebuffer);
+    {
+        if (boundFramebuffer == framebuffer)
+            boundFramebuffer = 0;
+    }
 }
 
 void GLStateManager::NotifyGLRenderTargetRelease(GLRenderTarget* renderTarget)
@@ -1327,7 +1361,7 @@ GLenum GLStateManager::ToGLTextureTarget(const GLTextureTarget target)
 
 void GLStateManager::BindTexture(GLTextureTarget target, GLuint texture)
 {
-    /* Only bind texutre if the texture has changed */
+    /* Only bind texture if the texture has changed */
     auto targetIdx = static_cast<std::size_t>(target);
     GLContextState::TextureLayer* textureLayer = GetActiveTextureLayer();
     if (textureLayer->boundTextures[targetIdx] != texture)
@@ -1343,7 +1377,7 @@ void GLStateManager::BindTexture(GLuint layer, GLTextureTarget target, GLuint te
     LLGL_ASSERT_UPPER_BOUND(layer, GLContextState::numTextureLayers);
     #endif
 
-    /* Only bind texutre if the texture has changed */
+    /* Only bind texture if the texture has changed */
     auto targetIdx = static_cast<std::size_t>(target);
     GLContextState::TextureLayer& textureLayer = contextState_.textureLayers[layer];
     if (textureLayer.boundTextures[targetIdx] != texture)
@@ -1390,6 +1424,7 @@ void GLStateManager::BindTextures(GLuint first, GLsizei count, const GLTextureTa
     }
 }
 
+#if 0 //UNUSED
 void GLStateManager::UnbindTextures(GLuint first, GLsizei count)
 {
     #if LLGL_GLEXT_MULTI_BIND
@@ -1420,6 +1455,7 @@ void GLStateManager::UnbindTextures(GLuint first, GLsizei count)
         }
     }
 }
+#endif
 
 void GLStateManager::BindImageTexture(GLuint unit, GLint level, GLenum format, GLuint texture)
 {
@@ -1460,6 +1496,7 @@ void GLStateManager::BindImageTextures(GLuint first, GLsizei count, const GLenum
     }
 }
 
+#if 0 //UNUSED
 void GLStateManager::UnbindImageTextures(GLuint first, GLsizei count)
 {
     #if LLGL_GLEXT_MULTI_BIND
@@ -1476,6 +1513,7 @@ void GLStateManager::UnbindImageTextures(GLuint first, GLsizei count)
             BindImageTexture(first + static_cast<GLuint>(i), 0, 0, 0);
     }
 }
+#endif
 
 void GLStateManager::PushBoundTexture(GLuint layer, GLTextureTarget target)
 {
@@ -1674,15 +1712,14 @@ void GLStateManager::PopBoundShaderProgram()
     shaderProgramStack_.pop();
 }
 
-void GLStateManager::NotifyShaderProgramRelease(GLShaderProgram* shaderProgram)
+void GLStateManager::DeleteShaderProgram(GLuint program)
 {
-    if (shaderProgram != nullptr)
-        InvalidateBoundGLObject(contextState_.boundProgram, shaderProgram->GetID());
-}
-
-GLuint GLStateManager::GetBoundShaderProgram() const
-{
-    return contextState_.boundProgram;
+    LLGL_ASSERT(shaderProgramStack_.empty(), "GL shader program must not be deleted while there are pending stacked programs");
+    if (program != 0)
+    {
+        glDeleteProgram(program);
+        InvalidateBoundGLObject(contextState_.boundProgram, program);
+    }
 }
 
 /* ----- Program pipeline ----- */
@@ -1708,11 +1745,6 @@ void GLStateManager::NotifyProgramPipelineRelease(GLProgramPipeline* programPipe
     #endif
 }
 
-GLuint GLStateManager::GetBoundProgramPipeline() const
-{
-    return contextState_.boundProgramPipeline;
-}
-
 #else // LLGL_GLEXT_SEPARATE_SHADER_OBJECTS
 
 void GLStateManager::BindProgramPipeline(GLuint pipeline)
@@ -1725,17 +1757,60 @@ void GLStateManager::NotifyProgramPipelineRelease(GLProgramPipeline* programPipe
     LLGL_TRAP_FEATURE_NOT_SUPPORTED("GL_ARB_separate_shader_objects");
 }
 
-GLuint GLStateManager::GetBoundProgramPipeline() const
+#endif // /LLGL_GLEXT_SEPARATE_SHADER_OBJECTS
+
+/* ----- Deferred shader pipeline */
+
+void GLStateManager::BindDeferredShaderPipeline(GLPipelineState& pipelineState)
 {
-    return 0; // dummy
+    if (pipelineState.HasPermutation(GLShader::PermutationFlippedYPosition))
+    {
+        /* Store pipeline state and bind the shader pipeline at the beginning of a render pass */
+        deferredShaderPipeline_.pipelineState = &pipelineState;
+        deferredShaderPipeline_.currentPermutation = GLShader::PermutationCount;
+    }
+    else
+    {
+        /* If no special permutation exists, bind the shader pipeline immediately and reset the deferred state */
+        pipelineState.BindShaderPipeline(*this, GLShader::PermutationDefault);
+        deferredShaderPipeline_.pipelineState = nullptr;
+    }
 }
 
-#endif // /LLGL_GLEXT_SEPARATE_SHADER_OBJECTS
+//private
+void GLStateManager::FlushDeferredShaderPipelinePermutation(GLShader::Permutation permutation)
+{
+    if (deferredShaderPipeline_.currentPermutation != permutation)
+    {
+        deferredShaderPipeline_.currentPermutation = permutation;
+        deferredShaderPipeline_.pipelineState->BindShaderPipeline(*this, permutation);
+    }
+}
+
+void GLStateManager::FlushDeferredShaderPipeline()
+{
+    if (deferredShaderPipeline_.pipelineState != nullptr)
+    {
+        if (GetBoundRenderTarget() != nullptr)
+            FlushDeferredShaderPipelinePermutation(GLShader::PermutationFlippedYPosition);
+        else
+            FlushDeferredShaderPipelinePermutation(GLShader::PermutationDefault);
+    }
+}
 
 /* ----- Render pass ----- */
 
 void GLStateManager::BindRenderTarget(RenderTarget& renderTarget, GLStateManager** nextStateManager)
 {
+    #if LLGL_GL_DRIVER_BUG_ANGLE_glBufferSubData
+    /*
+    Reset staging buffer pool every time a render-target is bound.
+    This should ensure that abstracted command encoders in WebGL for instance should be flushed.
+    The staging buffer pool should be kept small, to avoid large staging buffer chunks that can build up during a frame.
+    */
+    context_->GetStagingBufferPool().Reset();
+    #endif
+
     /* Bind render target/context */
     if (LLGL::IsInstanceOf<SwapChain>(renderTarget))
     {
@@ -1860,7 +1935,7 @@ void GLStateManager::ClearBuffers(std::uint32_t numAttachments, const Attachment
 
 void GLStateManager::BindTransformFeedback(GLuint transformFeedback)
 {
-    #if LLGL_GLEXT_TRNASFORM_FEEDBACK2
+    #if LLGL_GLEXT_TRANSFORM_FEEDBACK2
     if (contextState_.boundTransformFeedback != transformFeedback)
     {
         contextState_.boundTransformFeedback = transformFeedback;
@@ -1991,7 +2066,7 @@ void GLStateManager::DetermineVendorSpecificExtensions()
 {
     #if GL_NV_conservative_raster || GL_INTEL_conservative_rasterization
 
-    /* Initialize extenstion states */
+    /* Initialize extension states */
     auto InitStateExt = [&](GLStateExt state, const GLExt extension, GLenum cap)
     {
         auto idx = static_cast<std::size_t>(state);

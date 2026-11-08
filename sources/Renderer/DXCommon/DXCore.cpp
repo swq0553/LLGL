@@ -242,9 +242,9 @@ ComPtr<ID3DBlob> DXCreateBlob(const void* data, std::size_t size)
     return blob;
 }
 
-ComPtr<ID3DBlob> DXCreateBlob(const std::vector<char>& data)
+ComPtr<ID3DBlob> DXCreateBlob(const Blob& inBlob)
 {
-    return DXCreateBlob(data.data(), data.size());
+    return DXCreateBlob(inBlob.GetData(), inBlob.GetSize());
 }
 
 ComPtr<ID3DBlob> DXCreateBlobFromResource(int resourceID)
@@ -274,33 +274,51 @@ ComPtr<ID3DBlob> DXCreateBlobFromResource(int resourceID)
     return blob;
 }
 
-static const Format g_D3DDefaultTextureFormats[] =
+static void DXGetSupportedBaseFormats(std::vector<Format>& formats)
 {
-    Format::A8UNorm,
-    Format::R8UNorm,            Format::R8SNorm,            Format::R8UInt,             Format::R8SInt,
-    Format::R16UNorm,           Format::R16SNorm,           Format::R16UInt,            Format::R16SInt,            Format::R16Float,
-    Format::R32UInt,            Format::R32SInt,            Format::R32Float,
-    Format::RG8UNorm,           Format::RG8SNorm,           Format::RG8UInt,            Format::RG8SInt,
-    Format::RG16UNorm,          Format::RG16SNorm,          Format::RG16UInt,           Format::RG16SInt,           Format::RG16Float,
-    Format::RG32UInt,           Format::RG32SInt,           Format::RG32Float,
-    Format::RGB32UInt,          Format::RGB32SInt,          Format::RGB32Float,
-    Format::RGBA8UNorm,         Format::RGBA8UNorm_sRGB,    Format::RGBA8SNorm,         Format::RGBA8UInt,          Format::RGBA8SInt,
-    Format::RGBA16UNorm,        Format::RGBA16SNorm,        Format::RGBA16UInt,         Format::RGBA16SInt,         Format::RGBA16Float,
-    Format::RGBA32UInt,         Format::RGBA32SInt,         Format::RGBA32Float,
-    Format::BGRA8UNorm,         Format::BGRA8UNorm_sRGB,
-    Format::RGB10A2UNorm,       Format::RGB10A2UInt,        Format::RG11B10Float,       Format::RGB9E5Float,        Format::BGR5A1UNorm,
-    Format::D16UNorm,           Format::D32Float,           Format::D24UNormS8UInt,     Format::D32FloatS8X24UInt,
-    Format::BC1UNorm,           Format::BC1UNorm_sRGB,
-    Format::BC2UNorm,           Format::BC2UNorm_sRGB,
-    Format::BC3UNorm,           Format::BC3UNorm_sRGB,
-};
+    formats.insert(
+        formats.end(),
+        {
+            Format::R8UNorm,            Format::R8SNorm,            Format::R8UInt,             Format::R8SInt,
+            Format::R16UNorm,           Format::R16SNorm,           Format::R16UInt,            Format::R16SInt,            Format::R16Float,
+            Format::R32UInt,            Format::R32SInt,            Format::R32Float,
+            Format::RG8UNorm,           Format::RG8SNorm,           Format::RG8UInt,            Format::RG8SInt,
+            Format::RG16UNorm,          Format::RG16SNorm,          Format::RG16UInt,           Format::RG16SInt,           Format::RG16Float,
+            Format::RG32UInt,           Format::RG32SInt,           Format::RG32Float,
+            Format::RGB32UInt,          Format::RGB32SInt,          Format::RGB32Float,
+            Format::RGBA8UNorm,         Format::RGBA8UNorm_sRGB,    Format::RGBA8SNorm,         Format::RGBA8UInt,          Format::RGBA8SInt,
+            Format::RGBA16UNorm,        Format::RGBA16SNorm,        Format::RGBA16UInt,         Format::RGBA16SInt,         Format::RGBA16Float,
+            Format::RGBA32UInt,         Format::RGBA32SInt,         Format::RGBA32Float,
+        }
+    );
+}
 
-void DXGetDefaultSupportedTextureFormats(Format* outFormats, std::size_t* outNumFormats)
+void DXGetDefaultSupportedTextureFormats(std::vector<Format>& textureFormats)
 {
-    if (outFormats != nullptr)
-        ::memcpy(outFormats, g_D3DDefaultTextureFormats, sizeof(g_D3DDefaultTextureFormats));
-    if (outNumFormats != nullptr)
-        *outNumFormats = LLGL_ARRAY_LENGTH(g_D3DDefaultTextureFormats);
+    textureFormats.insert(
+        textureFormats.end(),
+        {
+            Format::A8UNorm,
+            Format::BGRA8UNorm,         Format::BGRA8UNorm_sRGB,
+            Format::RGB10A2UNorm,       Format::RGB10A2UInt,        Format::RG11B10Float,       Format::RGB9E5Float,        Format::BGR5A1UNorm,
+            Format::B5G6R5UNorm,        Format::BGRA4UNorm,
+            Format::D16UNorm,           Format::D32Float,           Format::D24UNormS8UInt,     Format::D32FloatS8X24UInt,
+            Format::BC1UNorm,           Format::BC1UNorm_sRGB,
+            Format::BC2UNorm,           Format::BC2UNorm_sRGB,
+            Format::BC3UNorm,           Format::BC3UNorm_sRGB,
+        }
+    );
+    DXGetSupportedBaseFormats(textureFormats);
+}
+
+std::vector<Format> GetSupportedDXVertexFormats()
+{
+    std::vector<Format> vertexFormats =
+    {
+        Format::BGRA8UNorm // Only one BGRA vertex format
+    };
+    DXGetSupportedBaseFormats(vertexFormats);
+    return vertexFormats;
 }
 
 // see https://msdn.microsoft.com/en-us/library/windows/desktop/ff476876(v=vs.85).aspx
@@ -388,7 +406,7 @@ void DXConvertVideoAdapterInfo(IDXGIAdapter* adapter, const DXGI_ADAPTER_DESC& i
     outInfo.outputs     = GetDXGIAdapterOutputInfos(adapter);
 }
 
-static bool GetDXGIAdapterInfo(IDXGIFactory* factory, long preferredAdapterFlags, VideoAdapterInfo& outInfo, IDXGIAdapter** outPreferredAdatper)
+static bool GetDXGIAdapterInfo(IDXGIFactory* factory, long preferredAdapterFlags, VideoAdapterInfo& outInfo, IDXGIAdapter** outPreferredAdapter)
 {
     /* Enumerate over all video adapters */
     ComPtr<IDXGIAdapter> adapter;
@@ -396,36 +414,38 @@ static bool GetDXGIAdapterInfo(IDXGIFactory* factory, long preferredAdapterFlags
     {
         /* Get adapter descriptor and check if this is either the preferred or the default adapter */
         DXGI_ADAPTER_DESC desc;
-        adapter->GetDesc(&desc);
+        HRESULT hr = adapter->GetDesc(&desc);
+        DXThrowIfFailed(hr, "failed to get DXGI_ADAPTER_DESC from DXGI adapter");
+
         const DeviceVendor vendor = GetVendorByID(desc.VendorId);
 
         const bool isPreferredAdapter = MatchPreferredVendor(vendor, preferredAdapterFlags);
         if (preferredAdapterFlags == 0 || isPreferredAdapter)
         {
             DXConvertVideoAdapterInfo(adapter.Get(), desc, outInfo);
-            if (isPreferredAdapter && outPreferredAdatper != nullptr)
-                *outPreferredAdatper = adapter.Detach();
+            if (isPreferredAdapter && outPreferredAdapter != nullptr)
+                *outPreferredAdapter = adapter.Detach();
             return true;
         }
     }
     return false;
 }
 
-VideoAdapterInfo DXGetVideoAdapterInfo(IDXGIFactory* factory, long preferredAdapterFlags, IDXGIAdapter** outPreferredAdatper)
+VideoAdapterInfo DXGetVideoAdapterInfo(IDXGIFactory* factory, long preferredAdapterFlags, IDXGIAdapter** outPreferredAdapter)
 {
     LLGL_ASSERT_PTR(factory);
 
-    constexpr long preferrenceFlags = (RenderSystemFlags::PreferNVIDIA | RenderSystemFlags::PreferAMD | RenderSystemFlags::PreferIntel);
+    constexpr long preferenceFlags = (RenderSystemFlags::PreferNVIDIA | RenderSystemFlags::PreferAMD | RenderSystemFlags::PreferIntel);
 
     VideoAdapterInfo info;
 
-    if ((preferredAdapterFlags & preferrenceFlags) != 0)
+    if ((preferredAdapterFlags & preferenceFlags) != 0)
     {
-        if (GetDXGIAdapterInfo(factory, preferredAdapterFlags, info, outPreferredAdatper))
+        if (GetDXGIAdapterInfo(factory, preferredAdapterFlags, info, outPreferredAdapter))
             return info;
     }
 
-    if (GetDXGIAdapterInfo(factory, 0, info, outPreferredAdatper))
+    if (GetDXGIAdapterInfo(factory, 0, info, outPreferredAdapter))
         return info;
 
     return VideoAdapterInfo{};
@@ -439,7 +459,7 @@ One and two component shader attributes can be shared with other input/ouput reg
     float2 TC  : TEXCOORD; // Components __ZW
   };
 This function counts how many bits are in the input value and return it as the component count,
-assuming that components are always consequtive, i.e. XY_W for instance is not considered a valid component mask for shader attributes.
+assuming that components are always consecutive, i.e. XY_W for instance is not considered a valid component mask for shader attributes.
 */
 static BYTE ComponentMaskToCount(BYTE v)
 {
@@ -510,8 +530,18 @@ Format DXGetSignatureParameterType(D3D_REGISTER_COMPONENT_TYPE componentType, BY
     LLGL_TRAP("failed to map Direct3D signature parameter to LLGL::Format");
 }
 
-DXGI_FORMAT DXPickDepthStencilFormat(int depthBits, int stencilBits)
+DXGI_FORMAT DXPickDepthStencilFormat(Format depthStencilFormat, int depthBits, int stencilBits)
 {
+    /* Honor an explicitly requested depth-stencil format */
+    switch (depthStencilFormat)
+    {
+        case Format::D16UNorm:          return DXGI_FORMAT_D16_UNORM;
+        case Format::D24UNormS8UInt:    return DXGI_FORMAT_D24_UNORM_S8_UINT;
+        case Format::D32Float:          return DXGI_FORMAT_D32_FLOAT;
+        case Format::D32FloatS8X24UInt: return DXGI_FORMAT_D32_FLOAT_S8X24_UINT;
+        default:                        break;
+    }
+
     /* Only return unknown format if depth-stencil is explicitly disabled */
     if (depthBits == 0 && stencilBits == 0)
         return DXGI_FORMAT_UNKNOWN;

@@ -31,8 +31,6 @@ namespace LLGL
 
 /* ----- Common ----- */
 
-constexpr std::uint32_t VKSwapChain::maxNumFramesInFlight;
-
 static VKPtr<VkImageView> NullVkImageView(VkDevice device)
 {
     return VKPtr<VkImageView>{ device, vkDestroyImageView };
@@ -58,39 +56,32 @@ VKSwapChain::VKSwapChain(
     VkPhysicalDevice                physicalDevice,
     VkDevice                        device,
     VKDeviceMemoryManager&          deviceMemoryMngr,
+    const VKSharedCommandQueueSPtr& graphicsQueue,
     const SwapChainDescriptor&      desc,
     const std::shared_ptr<Surface>& surface,
     const RendererInfo&             rendererInfo)
 :
-    SwapChain                { desc                            },
-    instance_                { instance                        },
-    physicalDevice_          { physicalDevice                  },
-    device_                  { device                          },
-    deviceMemoryMngr_        { deviceMemoryMngr                },
-    surface_                 { instance, vkDestroySurfaceKHR   },
-    swapChain_               { device, vkDestroySwapchainKHR   },
-    swapChainRenderPass_     { device                          },
-    swapChainSamples_        { GetClampedSamples(desc.samples) },
-    secondaryRenderPass_     { device                          },
-    depthStencilBuffer_      { device                          },
-    imageAvailableSemaphore_ { NullVkSemaphore(device_),
-                               NullVkSemaphore(device_),
-                               NullVkSemaphore(device_)        },
-    renderFinishedSemaphore_ { NullVkSemaphore(device_),
-                               NullVkSemaphore(device_),
-                               NullVkSemaphore(device_)        },
-    inFlightFences_          { NullVkFence(device_),
-                               NullVkFence(device_),
-                               NullVkFence(device_)            }
+    SwapChain             { desc                            },
+    instance_             { instance                        },
+    physicalDevice_       { physicalDevice                  },
+    device_               { device                          },
+    deviceMemoryMngr_     { deviceMemoryMngr                },
+    surface_              { instance, vkDestroySurfaceKHR   },
+    swapChain_            { device, vkDestroySwapchainKHR   },
+    swapChainRenderPass_  { device                          },
+    requestedColorFormat_ { VKTypes::Map(desc.colorFormat)  },
+    swapChainSamples_     { GetClampedSamples(desc.samples) },
+    secondaryRenderPass_  { device                          },
+    depthStencilBuffer_   { device                          },
+    graphicsQueue_        { graphicsQueue                   }
 {
     SetOrCreateSurface(surface, SwapChain::BuildDefaultSurfaceTitle(rendererInfo), desc);
 
-    CreatePresentSemaphoresAndFences();
     CreateGpuSurface();
 
     /* Pick image count for swap-chain and depth-stencil format */
     numPreferredColorBuffers_   = PickSwapChainSize(desc.swapBuffers);
-    depthStencilFormat_         = PickDepthStencilFormat(desc.depthBits, desc.stencilBits);
+    depthStencilFormat_         = PickDepthStencilFormat(desc);
 
     /* Create Vulkan render passes, swap-chain, depth-stencil buffer, and multisampling color buffers */
     CreateDefaultAndSecondaryRenderPass();
@@ -109,10 +100,18 @@ bool VKSwapChain::IsPresentable() const
 
 void VKSwapChain::Present()
 {
+    /*
+    If a previous Present/Acquire reported the swap-chain as out-of-date but it could not be
+    recreated yet (e.g. a zero-size/minimized window), retry the recreation and skip this frame.
+    */
+    if (swapChainOutOfDate_)
+    {
+        RecreateSwapChain();
+        return;
+    }
+
     /* Initialize semaphores */
-    VkSemaphore waitSemaphores[] = { imageAvailableSemaphore_[currentFrameInFlight_] };
     VkPipelineStageFlags waitStages[] = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
-    VkSemaphore signalSemaphores[] = { renderFinishedSemaphore_[currentFrameInFlight_] };
 
     /* Submit signal semaphore to graphics queue */
     VkSubmitInfo submitInfo;
@@ -120,14 +119,14 @@ void VKSwapChain::Present()
         submitInfo.sType                = VK_STRUCTURE_TYPE_SUBMIT_INFO;
         submitInfo.pNext                = nullptr;
         submitInfo.waitSemaphoreCount   = 1;
-        submitInfo.pWaitSemaphores      = waitSemaphores;
+        submitInfo.pWaitSemaphores      = imageAvailableSemaphore_[currentFrameInFlight_].GetAddressOf();
         submitInfo.pWaitDstStageMask    = waitStages;
         submitInfo.commandBufferCount   = 0;
         submitInfo.pCommandBuffers      = nullptr;
         submitInfo.signalSemaphoreCount = 1;
-        submitInfo.pSignalSemaphores    = signalSemaphores;
+        submitInfo.pSignalSemaphores    = renderFinishedSemaphore_[currentFrameInFlight_].GetAddressOf();
     }
-    VkResult result = vkQueueSubmit(graphicsQueue_, 1, &submitInfo, inFlightFences_[currentFrameInFlight_]);
+    VkResult result = graphicsQueue_->Submit(submitInfo, inFlightFences_[currentFrameInFlight_]);
     VKThrowIfFailed(result, "failed to submit semaphore to Vulkan graphics queue");
 
     /* Present result on screen */
@@ -136,13 +135,25 @@ void VKSwapChain::Present()
         presentInfo.sType               = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
         presentInfo.pNext               = nullptr;
         presentInfo.waitSemaphoreCount  = 1;
-        presentInfo.pWaitSemaphores     = signalSemaphores;
+        presentInfo.pWaitSemaphores     = renderFinishedSemaphore_[currentFrameInFlight_].GetAddressOf();
         presentInfo.swapchainCount      = 1;
         presentInfo.pSwapchains         = swapChain_.GetAddressOf();
         presentInfo.pImageIndices       = &currentColorBuffer_;
         presentInfo.pResults            = nullptr;
     }
     result = vkQueuePresentKHR(presentQueue_, &presentInfo);
+
+    /*
+    VK_ERROR_OUT_OF_DATE_KHR / VK_SUBOPTIMAL_KHR are not fatal: the surface no longer matches the
+    swap-chain (window resize, DPI change, or the first present on some drivers, e.g. Adreno).
+    Recreate the swap-chain instead of trapping. RecreateSwapChain() re-acquires the next image,
+    so we return here rather than falling through to AcquireNextColorBuffer().
+    */
+    if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR)
+    {
+        RecreateSwapChain();
+        return;
+    }
     VKThrowIfFailed(result, "failed to present Vulkan graphics queue");
 
     /* Move to next frame */
@@ -184,7 +195,6 @@ bool VKSwapChain::SetVsyncInterval(std::uint32_t vsyncInterval)
     /* Recreate swap-chain with new vsnyc settings */
     if (vsyncInterval_ != vsyncInterval)
     {
-        CreatePresentSemaphoresAndFences();
         CreateSwapChain(GetResolution(), vsyncInterval);
         CreateSwapChainFramebuffers();
         vsyncInterval_ = vsyncInterval;
@@ -212,28 +222,6 @@ bool VKSwapChain::HasMultiSampling() const
     return (swapChainSamples_ > 1);
 }
 
-template <typename TDst>
-void CopyVkImageRegion(TDst& outRegion, const TextureRegion& dstRegion, const Offset2D& srcOffset, VkImageAspectFlags aspectFlags)
-{
-    outRegion.srcSubresource.aspectMask     = aspectFlags;
-    outRegion.srcSubresource.mipLevel       = 0;
-    outRegion.srcSubresource.baseArrayLayer = 0;
-    outRegion.srcSubresource.layerCount     = 1u;
-    outRegion.srcOffset.x                   = srcOffset.x;
-    outRegion.srcOffset.y                   = srcOffset.y;
-    outRegion.srcOffset.z                   = 0;
-    outRegion.dstSubresource.aspectMask     = aspectFlags;
-    outRegion.dstSubresource.mipLevel       = dstRegion.subresource.baseMipLevel;
-    outRegion.dstSubresource.baseArrayLayer = dstRegion.subresource.baseArrayLayer;
-    outRegion.dstSubresource.layerCount     = 1u;
-    outRegion.dstOffset.x                   = dstRegion.offset.x;
-    outRegion.dstOffset.y                   = dstRegion.offset.y;
-    outRegion.dstOffset.z                   = dstRegion.offset.z;
-    outRegion.extent.width                  = dstRegion.extent.width;
-    outRegion.extent.height                 = dstRegion.extent.height;
-    outRegion.extent.depth                  = 1u;
-}
-
 void VKSwapChain::CopyImage(
     VKCommandContext&       context,
     VkImage                 dstImage,
@@ -249,7 +237,7 @@ void VKSwapChain::CopyImage(
     if (HasMultiSampling())
     {
         VkImageResolve resolveRegion;
-        CopyVkImageRegion(resolveRegion, dstRegion, srcOffset, aspectFlags);
+        VKImageUtils::InitVkImageRegion(resolveRegion, dstRegion, Offset3D{ srcOffset.x, srcOffset.y, 0 }, aspectFlags, aspectFlags);
 
         if (isDepthStencil)
         {
@@ -269,7 +257,7 @@ void VKSwapChain::CopyImage(
     else
     {
         VkImageCopy copyRegion;
-        CopyVkImageRegion(copyRegion, dstRegion, srcOffset, aspectFlags);
+        VKImageUtils::InitVkImageRegion(copyRegion, dstRegion, Offset3D{ srcOffset.x, srcOffset.y, 0 }, aspectFlags, aspectFlags);
 
         if (isDepthStencil)
         {
@@ -277,13 +265,13 @@ void VKSwapChain::CopyImage(
                 return /*No depth-stencil buffer*/;
 
             VkImage srcImage = depthStencilBuffer_.GetVkImage();
-            context.CopyImage(srcImage, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, dstImage, dstImageLayout, copyRegion, format);
+            context.CopyImage(srcImage, format, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, dstImage, format, dstImageLayout, copyRegion);
         }
         else
         {
             LLGL_ASSERT(srcColorBuffer < swapChainImages_.size());
             VkImage srcImage = swapChainImages_[srcColorBuffer];
-            context.CopyImage(srcImage, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, dstImage, dstImageLayout, copyRegion, format);
+            context.CopyImage(srcImage, format, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, dstImage, format, dstImageLayout, copyRegion);
         }
     }
 }
@@ -293,24 +281,25 @@ void VKSwapChain::CopyImage(
  * ======= Private: =======
  */
 
-bool VKSwapChain::ResizeBuffersPrimary(const Extent2D& resolution)
+Extent2D VKSwapChain::ResizeBuffersPrimary(const Extent2D& resolution)
 {
     /* Check if new resolution would actually change the swap-chain extent */
     if (swapChainExtent_.width  != resolution.width ||
         swapChainExtent_.height != resolution.height)
     {
         /* Wait until graphics queue is idle before resources are destroyed and recreated */
-        vkQueueWaitIdle(graphicsQueue_);
+        graphicsQueue_->WaitIdle();
 
         /* Recreate presenting semaphores and Vulkan surface */
-        CreatePresentSemaphoresAndFences();
         CreateGpuSurface();
 
         /* Recreate color and depth-stencil buffers */
         ReleaseRenderBuffers();
         CreateResolutionDependentResources(resolution);
     }
-    return true;
+
+    /* Report the extent the swap-chain was actually created with, which may have been clamped to the surface capabilities */
+    return Extent2D{ swapChainExtent_.width, swapChainExtent_.height };
 }
 
 void VKSwapChain::CreateGpuSemaphore(VKPtr<VkSemaphore>& semaphore)
@@ -340,12 +329,29 @@ void VKSwapChain::CreateGpuFence(VKPtr<VkFence>& fence)
 
 void VKSwapChain::CreatePresentSemaphoresAndFences()
 {
-    /* Create presentation semaphorse */
-    for_range(i, maxNumFramesInFlight)
+    /*
+    Allocate arrays for number of color buffers.
+    Android devices tend to have 4, while PC usually only has 3.
+    For that reason, we need to use dynamic arrays instead of a fixed size array.
+    */
+    imageAvailableSemaphore_.resize(numColorBuffers_);
+    renderFinishedSemaphore_.resize(numColorBuffers_);
+    inFlightFences_.resize(numColorBuffers_);
+
+    /* Create presentation semaphorses and fences */
+    for_range(i, numColorBuffers_)
     {
-        CreateGpuSemaphore(imageAvailableSemaphore_[i]);
-        CreateGpuSemaphore(renderFinishedSemaphore_[i]);
-        CreateGpuFence(inFlightFences_[i]);
+        VKPtr<VkSemaphore> imageAvailableSemaphore{ NullVkSemaphore(device_) };
+        CreateGpuSemaphore(imageAvailableSemaphore);
+        imageAvailableSemaphore_[i] = std::move(imageAvailableSemaphore);
+
+        VKPtr<VkSemaphore> renderFinishedSemaphore{ NullVkSemaphore(device_) };
+        CreateGpuSemaphore(renderFinishedSemaphore);
+        renderFinishedSemaphore_[i] = std::move(renderFinishedSemaphore);
+
+        VKPtr<VkFence> inFlightFence{ NullVkFence(device_) };
+        CreateGpuFence(inFlightFence);
+        inFlightFences_[i] = std::move(inFlightFence);
     }
 }
 
@@ -470,20 +476,51 @@ void VKSwapChain::CreateDefaultAndSecondaryRenderPass()
     CreateRenderPass(secondaryRenderPass_, AttachmentLoadOp::Load, AttachmentStoreOp::Store);
 }
 
+static VkPresentModeKHR PickSwapPresentMode(const std::vector<VkPresentModeKHR>& presentModes, std::uint32_t vsyncInterval, bool isTearingAllowed)
+{
+    if (vsyncInterval == 0)
+    {
+        if (isTearingAllowed)
+        {
+            /* Prefer immediate present mode to allow tearing */
+            for (const VkPresentModeKHR& mode : presentModes)
+            {
+                if (mode == VK_PRESENT_MODE_IMMEDIATE_KHR)
+                    return mode;
+            }
+        }
+
+        /* Alternatively, check if MAILBOX presentation mode is available */
+        for (const VkPresentModeKHR& mode : presentModes)
+        {
+            if (mode == VK_PRESENT_MODE_MAILBOX_KHR)
+                return mode;
+        }
+    }
+    return VK_PRESENT_MODE_FIFO_KHR;
+}
+
 void VKSwapChain::CreateSwapChain(const Extent2D& resolution, std::uint32_t vsyncInterval)
 {
     /* Pick swap-chain extent by resolution */
     swapChainExtent_ = PickSwapExtent(surfaceSupportDetails_.caps, resolution);
 
+    /*
+    Report the extent that was actually picked, not the one that was requested:
+    PickSwapExtent() clamps to the surface's min/max image extent, which on most
+    windowing systems both equal the window's current client area.
+    */
+    SetResolution(Extent2D{ swapChainExtent_.width, swapChainExtent_.height });
+
     /* Get device queues for graphics and presentation */
     VkSurfaceKHR surface = surface_.Get();
     const VKQueueFamilyIndices queueFamilyIndices = VKFindQueueFamilies(physicalDevice_, VK_QUEUE_GRAPHICS_BIT, &surface);
 
-    vkGetDeviceQueue(device_, queueFamilyIndices.graphicsFamily, 0, &graphicsQueue_);
     vkGetDeviceQueue(device_, queueFamilyIndices.presentFamily, 0, &presentQueue_);
 
     /* Pick swap-chain presentation mode (with v-sync parameters) */
-    const VkPresentModeKHR presentMode = PickSwapPresentMode(surfaceSupportDetails_.presentModes, vsyncInterval);
+    constexpr bool isTearingAllowed = true;
+    const VkPresentModeKHR presentMode = PickSwapPresentMode(surfaceSupportDetails_.presentModes, vsyncInterval, isTearingAllowed);
 
     /* Create swap-chain */
     VkSwapchainCreateInfoKHR createInfo;
@@ -536,7 +573,8 @@ void VKSwapChain::CreateSwapChain(const Extent2D& resolution, std::uint32_t vsyn
     result = vkGetSwapchainImagesKHR(device_, swapChain_, &numColorBuffers_, swapChainImages_.data());
     VKThrowIfFailed(result, "failed to query Vulkan swap-chain images");
 
-    /* Create swap-chain image views */
+    /* Create present semaphores, fences, and swap-chain image views */
+    CreatePresentSemaphoresAndFences();
     CreateSwapChainImageViews();
 
     /* Get initial color buffer index for new Vulkan swap-chain */
@@ -683,6 +721,23 @@ VkSurfaceFormatKHR VKSwapChain::PickSwapSurfaceFormat(const std::vector<VkSurfac
     if (surfaceFormats.empty())
         LLGL_TRAP("no Vulkan surface formats available");
 
+    /* Honor an explicitly requested format when the surface supports it.
+       This is how an application asks for an sRGB swap-chain, so the hardware performs the
+       linear-to-sRGB conversion on write instead of the shader. */
+    if (requestedColorFormat_ != VK_FORMAT_UNDEFINED)
+    {
+        if (surfaceFormats.size() == 1 && surfaceFormats.front().format == VK_FORMAT_UNDEFINED)
+            return {requestedColorFormat_, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR};
+
+        for (const VkSurfaceFormatKHR& format : surfaceFormats)
+        {
+            if (format.format == requestedColorFormat_ && format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
+                return format;
+        }
+
+        /* Not supported by this surface - fall through to the automatic selection below. */
+    }
+
     if (surfaceFormats.size() == 1 && surfaceFormats.front().format == VK_FORMAT_UNDEFINED)
         return { VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR };
 
@@ -695,20 +750,6 @@ VkSurfaceFormatKHR VKSwapChain::PickSwapSurfaceFormat(const std::vector<VkSurfac
     return surfaceFormats.front();
 }
 
-VkPresentModeKHR VKSwapChain::PickSwapPresentMode(const std::vector<VkPresentModeKHR>& presentModes, std::uint32_t vsyncInterval) const
-{
-    if (vsyncInterval == 0)
-    {
-        /* Check if MAILBOX or IMMEDIATE presentation mode is available, to avoid vertical synchronization */
-        for (const VkPresentModeKHR& mode : presentModes)
-        {
-            if (mode == VK_PRESENT_MODE_MAILBOX_KHR || mode == VK_PRESENT_MODE_IMMEDIATE_KHR)
-                return mode;
-        }
-    }
-    return VK_PRESENT_MODE_FIFO_KHR;
-}
-
 VkExtent2D VKSwapChain::PickSwapExtent(const VkSurfaceCapabilitiesKHR& surfaceCaps, const Extent2D& resolution) const
 {
     return VkExtent2D
@@ -718,24 +759,43 @@ VkExtent2D VKSwapChain::PickSwapExtent(const VkSurfaceCapabilitiesKHR& surfaceCa
     };
 }
 
-static std::vector<VkFormat> GetDepthStencilFormatPreference(int depthBits, int stencilBits)
+static std::vector<VkFormat> GetDepthStencilFormatPreference(const SwapChainDescriptor& desc)
 {
-    if (stencilBits == 0)
+    /*
+    Honor an explicitly requested depth-stencil format and list the closest matches as fallback
+    in case the physical device does not support the requested one.
+    */
+    switch (desc.depthStencilFormat)
     {
-        if (depthBits == 32)
-            return { VK_FORMAT_D32_SFLOAT, VK_FORMAT_D24_UNORM_S8_UINT, VK_FORMAT_D16_UNORM_S8_UINT, VK_FORMAT_D16_UNORM };
+        case Format::D16UNorm:
+            return { VK_FORMAT_D16_UNORM, VK_FORMAT_D24_UNORM_S8_UINT, VK_FORMAT_D32_SFLOAT };
+        case Format::D24UNormS8UInt:
+            return { VK_FORMAT_D24_UNORM_S8_UINT, VK_FORMAT_D32_SFLOAT_S8_UINT };
+        case Format::D32Float:
+            return { VK_FORMAT_D32_SFLOAT, VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_D24_UNORM_S8_UINT, VK_FORMAT_D16_UNORM };
+        case Format::D32FloatS8X24UInt:
+            return { VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_D24_UNORM_S8_UINT };
+        default:
+            break;
+    }
+
+    /* Deduce the format from the deprecated depth/stencil bit sizes */
+    if (desc.stencilBits == 0)
+    {
+        if (desc.depthBits == 32)
+            return { VK_FORMAT_D32_SFLOAT, VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_D24_UNORM_S8_UINT, VK_FORMAT_D16_UNORM };
     }
     else
     {
-        if (depthBits == 32)
-            return { VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_D24_UNORM_S8_UINT, VK_FORMAT_D16_UNORM_S8_UINT };
+        if (desc.depthBits == 32)
+            return { VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_D24_UNORM_S8_UINT };
     }
-    return { VK_FORMAT_D24_UNORM_S8_UINT, VK_FORMAT_D16_UNORM_S8_UINT, VK_FORMAT_D32_SFLOAT, VK_FORMAT_D16_UNORM };
+    return { VK_FORMAT_D24_UNORM_S8_UINT, VK_FORMAT_D32_SFLOAT, VK_FORMAT_D16_UNORM };
 }
 
-VkFormat VKSwapChain::PickDepthStencilFormat(int depthBits, int stencilBits) const
+VkFormat VKSwapChain::PickDepthStencilFormat(const SwapChainDescriptor& desc) const
 {
-    const std::vector<VkFormat> formats = GetDepthStencilFormatPreference(depthBits, stencilBits);
+    const std::vector<VkFormat> formats = GetDepthStencilFormatPreference(desc);
     return VKFindSupportedImageFormat(
         physicalDevice_,
         formats.data(),
@@ -756,10 +816,14 @@ std::uint32_t VKSwapChain::PickSwapChainSize(std::uint32_t swapBuffers) const
 
 void VKSwapChain::AcquireNextColorBuffer()
 {
-    currentFrameInFlight_ = (currentFrameInFlight_ + 1) % maxNumFramesInFlight;
-    vkWaitForFences(device_, 1, inFlightFences_[currentFrameInFlight_].GetAddressOf(), VK_TRUE, UINT64_MAX);
+    /* Move to next frame index */
+    currentFrameInFlight_ = (currentFrameInFlight_ + 1) % numColorBuffers_;
 
-    vkAcquireNextImageKHR(
+    vkWaitForFences(device_, 1, inFlightFences_[currentFrameInFlight_].GetAddressOf(), VK_TRUE, UINT64_MAX);
+    vkResetFences(device_, 1, inFlightFences_[currentFrameInFlight_].GetAddressOf());
+
+    /* Acquire next image from swap-chain and signal image available semaphore */
+    VkResult result = vkAcquireNextImageKHR(
         device_,
         swapChain_,
         UINT64_MAX,
@@ -768,13 +832,51 @@ void VKSwapChain::AcquireNextColorBuffer()
         &currentColorBuffer_
     );
 
+    /*
+    A stale swap-chain reports VK_ERROR_OUT_OF_DATE_KHR here and leaves currentColorBuffer_
+    undefined. Flag it for recreation on the next Present() instead of asserting on the invalid
+    image index. VK_SUBOPTIMAL_KHR still returns a usable image, so it is treated as success.
+    */
+    if (result == VK_ERROR_OUT_OF_DATE_KHR)
+    {
+        swapChainOutOfDate_ = true;
+        return;
+    }
+
     LLGL_ASSERT(
         currentColorBuffer_ < numColorBuffers_,
         "next swap-chain image index (%u) exceeds upper bound (%u)",
         currentColorBuffer_, numColorBuffers_
     );
+}
 
-    vkResetFences(device_, 1, inFlightFences_[currentFrameInFlight_].GetAddressOf());
+void VKSwapChain::RecreateSwapChain()
+{
+    /* Wait until the GPU is idle before in-flight resources are destroyed and recreated */
+    graphicsQueue_->WaitIdle();
+
+    /* Recreate the Vulkan surface so its capabilities (incl. current extent) are refreshed */
+    CreateGpuSurface();
+
+    /* Prefer the surface's reported current extent; fall back to the tracked resolution */
+    Extent2D resolution = GetResolution();
+    const VkExtent2D currentExtent = surfaceSupportDetails_.caps.currentExtent;
+    if (currentExtent.width != 0xFFFFFFFFu && currentExtent.height != 0xFFFFFFFFu)
+        resolution = Extent2D{ currentExtent.width, currentExtent.height };
+
+    /* A zero-area surface (e.g. minimized window) cannot host a swap-chain; defer recreation */
+    if (resolution.width == 0 || resolution.height == 0)
+    {
+        swapChainOutOfDate_ = true;
+        return;
+    }
+
+    /* Clear the flag before recreating so a nested AcquireNextColorBuffer() can re-set it */
+    swapChainOutOfDate_ = false;
+
+    /* Recreate color/depth-stencil buffers and the swap-chain (this re-acquires the next image) */
+    ReleaseRenderBuffers();
+    CreateResolutionDependentResources(resolution);
 }
 
 

@@ -87,10 +87,10 @@ enum class UniformType
     Int2,           //!< Two component vector of 32-bit signed integers. Use \c "int2" for parsing.
     Int3,           //!< Three component vector of 32-bit signed integers. Use \c "int3" for parsing.
     Int4,           //!< Four component vector of 32-bit signed integers. Use \c "int4" for parsing.
-    UInt1,          //!< Single scalar of a 32-bit unsigned integer. Use \c "int1" or \c "int" for parsing.
-    UInt2,          //!< Two component vector of 32-bit unsigned integers. Use \c "int2" for parsing.
-    UInt3,          //!< Three component vector of 32-bit unsigned integers. Use \c "int3" for parsing.
-    UInt4,          //!< Four component vector of 32-bit unsigned integers. Use \c "int4" for parsing.
+    UInt1,          //!< Single scalar of a 32-bit unsigned integer. Use \c "uint1" or \c "uint" for parsing.
+    UInt2,          //!< Two component vector of 32-bit unsigned integers. Use \c "uint2" for parsing.
+    UInt3,          //!< Three component vector of 32-bit unsigned integers. Use \c "uint3" for parsing.
+    UInt4,          //!< Four component vector of 32-bit unsigned integers. Use \c "uint4" for parsing.
     Bool1,          //!< Single scalar of a 32-bit boolean. Use \c "bool1" or \c "bool" for parsing.
     Bool2,          //!< Two component vector of 32-bit booleans. Use \c "bool2" for parsing.
     Bool3,          //!< Three component vector of 32-bit booleans. Use \c "bool3" for parsing.
@@ -344,7 +344,17 @@ struct UniformDescriptor
 
     /**
     \brief Specifies the name of an individual shader uniform. This <b>must not</b> be empty.
-    \remarks This describes the name of the constant itself and not its enclosing constant buffer.
+    \remarks This describes the name of the uniform declaration itself and not its enclosing constant buffer if used inside a \c cbuffer (HLSL) or UBO (GLSL).
+    That being said, chained identifiers are allowed if the unfiorm is wrapped inside a struct like in the following example:
+    \code{glsl}
+    struct Scene_t {
+        mat4 projection;
+    };
+    uniform Scene_t scene;
+    \endcode
+    Here, the unfiorm needs to be addressed as \c "scene.projection".
+    The ParseContext syntax even allows this to be written as \c "scene . projection" or any other whitespaces separating the identifiers.
+    \see ParseContext::AsPipelineLayoutDesc
     */
     StringLiteral   name;
 
@@ -468,7 +478,7 @@ struct PipelineLayoutDescriptor
     /**
     \brief Optional name for debugging purposes. By default null.
     \remarks The final name of the native hardware resource is implementation defined.
-    \see RenderSystemChild::SetName
+    \see RenderSystemChild::SetDebugName
     */
     const char*                                     debugName               = nullptr;
 

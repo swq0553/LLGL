@@ -10,7 +10,7 @@
 
 
 #include <LLGL/RenderPass.h>
-#include <vulkan/vulkan.h>
+#include "../Vulkan.h" // Configures the platform surface extension before <vulkan/vulkan.h> is pulled in
 #include "../VKPtr.h"
 #include <cstdint>
 
@@ -35,12 +35,20 @@ class VKRenderPass final : public RenderPass
             const RenderPassDescriptor& desc
         );
 
+        /*
+        Creates the render pass from a flat array of native attachment descriptors, laid out as
+        [0, numColorAttachments) color, [numColorAttachments] depth-stencil (if numColorAttachments < numAttachments),
+        [numAttachments, numAttachments + numColorAttachments) color resolve targets (only read when multi-sampled),
+        and [numAttachments + numColorAttachments] the depth-stencil resolve target (only read when 'hasDepthStencilResolve').
+        */
         void CreateVkRenderPassWithDescriptors(
             VkDevice                        device,
             std::uint32_t                   numAttachments,
             std::uint32_t                   numColorAttachments,
             const VkAttachmentDescription*  attachmentDescs,
-            VkSampleCountFlagBits           sampleCountBits
+            VkSampleCountFlagBits           sampleCountBits,
+            std::uint32_t                   numViews = 1,
+            bool                            hasDepthStencilResolve = false
         );
 
         // Returns the Vulkan render pass object.
@@ -82,6 +90,12 @@ class VKRenderPass final : public RenderPass
             return sampleCountBits_;
         }
 
+        // Returns the number of views for multiview rendering, or 1 if multiview is disabled for this render pass.
+        inline std::uint32_t GetNumViews() const
+        {
+            return numViews_;
+        }
+
     private:
 
         VKPtr<VkRenderPass>     renderPass_;
@@ -91,6 +105,7 @@ class VKRenderPass final : public RenderPass
         std::uint8_t            numClearValues_         = 0;
         std::uint8_t            numColorAttachments_    = 0;
         VkSampleCountFlagBits   sampleCountBits_        = VK_SAMPLE_COUNT_1_BIT;
+        std::uint32_t           numViews_               = 1;
 
 };
 

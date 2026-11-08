@@ -23,7 +23,6 @@
 namespace LLGL
 {
 
-
 D3D11Texture::D3D11Texture(ID3D11Device* device, const TextureDescriptor& desc) :
     Texture         { desc.type, desc.bindFlags             },
     baseFormat_     { desc.format                           },
@@ -50,6 +49,42 @@ D3D11Texture::D3D11Texture(ID3D11Device* device, const TextureDescriptor& desc) 
 
     if (desc.debugName != nullptr)
         SetDebugName(desc.debugName);
+}
+
+D3D11Texture::D3D11Texture(
+    ID3D11Device*       device,
+    TextureType         type,
+    long                bindFlags,
+    ID3D11Texture2D*    externalTexture,
+    Format              logicalFormat)
+:
+    Texture         { type, bindFlags                  },
+    bindingLocator_ { ResourceType::Texture, bindFlags }
+{
+    // ComPtr::operator= calls AddRef on the new pointer; the externally-owned texture stays
+    // alive via its own ref-counts and we add one more for the lifetime of this wrapper.
+    native_ = externalTexture;
+
+    // Query the texture's *actual* DXGI format - OpenXR runtimes commonly back swap-chain
+    // images with the typeless variant of the requested format (e.g. B8G8R8A8_TYPELESS for
+    // a B8G8R8A8_UNORM_SRGB request) so the same image can be reused for sRGB and linear views.
+    // Keeping the actual (typeless) DXGI format as format_ lets the view-creation paths detect the
+    // typeless case and create an explicit-format SRV/RTV instead of the default one.
+    D3D11_TEXTURE2D_DESC actualDesc{};
+    externalTexture->GetDesc(&actualDesc);
+
+    // The explicit view format comes from the caller-supplied logical (typed) format. Unmap cannot
+    // resolve a typeless DXGI format to a concrete LLGL format (it would yield Format::Undefined ->
+    // DXGI_FORMAT_UNKNOWN, which fails SRV/RTV creation), so the logical format is required for
+    // typeless images; fall back to Unmap only when the caller didn't supply one.
+    baseFormat_ = (logicalFormat != Format::Undefined ? logicalFormat : DXTypes::Unmap(actualDesc.Format));
+
+    SetResourceParams(
+        actualDesc.Format,
+        Extent3D{actualDesc.Width, actualDesc.Height, 1u},
+        actualDesc.MipLevels,
+        actualDesc.ArraySize);
+    CreateDefaultResourceViews(device, bindFlags);
 }
 
 bool D3D11Texture::GetNativeHandle(void* nativeHandle, std::size_t nativeHandleSize)
@@ -297,8 +332,13 @@ HRESULT D3D11Texture::UpdateSubresource(
     const char* srcData = static_cast<const char*>(imageView.data);
     LLGL_ASSERT_PTR(srcData);
 
-    std::uint32_t srcRowStride      = imageView.rowStride > 0 ? imageView.rowStride                 : dataLayout.rowStride;
-    std::uint32_t srcLayerStride    = imageView.rowStride > 0 ? imageView.rowStride * extent.height : dataLayout.layerStride;
+    std::uint32_t srcRowStride   = imageView.rowStride > 0 ? imageView.rowStride : dataLayout.rowStride;
+    std::uint32_t srcLayerStride = dataLayout.layerStride;
+    if (imageView.rowStride > 0)
+    {
+        /* Compressed formats use block rows rather than texel rows. */
+        srcLayerStride = srcRowStride * DivideRoundUp<std::uint32_t>(extent.height, formatAttribs.blockHeight);
+    }
 
     if ((formatAttribs.flags & FormatFlags::IsCompressed) == 0 &&
         (formatAttribs.format != imageView.format || formatAttribs.dataType != imageView.dataType))
@@ -1050,7 +1090,7 @@ void D3D11Texture::CreateDefaultUAV(ID3D11Device* device)
     if (hasTypelessFormat || hasDepthStencilFormat)
     {
         /* Create UAV with parameters for entire texture resource */
-        CreateSubresourceUAV(device, uav_.ReleaseAndGetAddressOf(), GetType(), DXTypes::ToDXGIFormat(GetFormat()), 0, 0, GetNumArrayLayers());
+        CreateSubresourceUAV(device, uav_.ReleaseAndGetAddressOf(), GetType(), DXTypes::ToDXGIFormat(GetFormat()), 0, 0, GetDepthOrArraySize());
     }
     else
     {
@@ -1065,6 +1105,11 @@ void D3D11Texture::SetResourceParams(DXGI_FORMAT format, const Extent3D& extent,
     format_         = format;
     numMipLevels_   = (mipLevels == 0 ? NumMipLevels(extent.width, extent.height, extent.height) : mipLevels);
     numArrayLayers_ = arraySize;
+}
+
+UINT D3D11Texture::GetDepthOrArraySize() const
+{
+    return (GetType() == TextureType::Texture3D ? GetMipExtent(0).depth : numArrayLayers_);
 }
 
 

@@ -34,9 +34,9 @@ DEF_TEST( TriangleStripCutOff )
 
     BufferDescriptor vertexBufDesc;
     {
-        vertexBufDesc.size          = sizeof(vertices);
-        vertexBufDesc.bindFlags     = BindFlags::VertexBuffer;
-        vertexBufDesc.vertexAttribs = vertexFormats[VertFmtUnprojected].attributes;
+        vertexBufDesc.size      = sizeof(vertices);
+        vertexBufDesc.stride    = sizeof(UnprojectedVertex);
+        vertexBufDesc.bindFlags = BindFlags::VertexBuffer;
     }
     CREATE_BUFFER(vertexBuf, vertexBufDesc, "vertices2D", vertices);
 
@@ -49,12 +49,12 @@ DEF_TEST( TriangleStripCutOff )
     constexpr std::uint32_t numUI16Indices = sizeof(indicesUI16)/sizeof(indicesUI16[0]);
     constexpr std::uint32_t numUI32Indices = sizeof(indicesUI32)/sizeof(indicesUI32[0]);
 
-    BufferDescriptor indedBufDesc;
+    BufferDescriptor indexBufDesc;
     {
-        indedBufDesc.size       = sizeof(indicesUI16) + sizeof(indicesUI32);
-        indedBufDesc.bindFlags  = BindFlags::IndexBuffer;
+        indexBufDesc.size       = sizeof(indicesUI16) + sizeof(indicesUI32);
+        indexBufDesc.bindFlags  = BindFlags::IndexBuffer;
     }
-    CREATE_BUFFER(indexBuf, indedBufDesc, "indices2D", nullptr);
+    CREATE_BUFFER(indexBuf, indexBufDesc, "indices2D", nullptr);
 
     renderer->WriteBuffer(*indexBuf, indicesUI16Offset, indicesUI16, sizeof(indicesUI16));
     renderer->WriteBuffer(*indexBuf, indicesUI32Offset, indicesUI32, sizeof(indicesUI32));
@@ -64,6 +64,7 @@ DEF_TEST( TriangleStripCutOff )
     {
         psoDesc.pipelineLayout      = nullptr; // No resource bindings, therefore no pipeline layout
         psoDesc.renderPass          = swapChain->GetRenderPass();
+        psoDesc.inputVertexAttribs  = vertexFormats[VertFmtUnprojected].attributes;
         psoDesc.vertexShader        = shaders[VSUnprojected];
         psoDesc.fragmentShader      = shaders[PSUnprojected];
         psoDesc.primitiveTopology   = PrimitiveTopology::TriangleStrip;
@@ -83,7 +84,7 @@ DEF_TEST( TriangleStripCutOff )
     Texture* readbackTex[2] = {};
 
     // Render scene
-    cmdBuffer->Begin();
+    BEGIN();
     {
         cmdBuffer->SetVertexBuffer(*vertexBuf);
         cmdBuffer->BeginRenderPass(*swapChain);
@@ -119,7 +120,7 @@ DEF_TEST( TriangleStripCutOff )
         }
         cmdBuffer->EndRenderPass();
     }
-    cmdBuffer->End();
+    END();
 
     // Diff color buffer for undefined and fixed index formats
     bool diffFailed = false;

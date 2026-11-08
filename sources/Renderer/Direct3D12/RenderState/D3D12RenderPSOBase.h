@@ -10,6 +10,7 @@
 
 
 #include "D3D12PipelineState.h"
+#include "../../StaticStateBuffer.h"
 #include <LLGL/Container/DynamicArray.h>
 
 
@@ -32,9 +33,10 @@ class D3D12RenderPSOBase : public D3D12PipelineState
 
         // Constructs the graphics PSO with the specified descriptor.
         D3D12RenderPSOBase(
-            D3D12PipelineType       type,
+            D3D12PipelineType           type,
 
             const StencilDescriptor&    stencilDesc,
+            const RasterizerDescriptor& rasterizerDesc,
             const BlendDescriptor&      blendDesc,
             bool                        isScissorEnabled,
             const ArrayView<Viewport>&  staticViewports,
@@ -54,21 +56,26 @@ class D3D12RenderPSOBase : public D3D12PipelineState
             return (scissorEnabled_ != 0);
         }
 
+        // Returns true if shading rate is enabled. Otherwise, binding this PSO must reset the previous shading rate.
+        // This is required to be uniform with Vulkan, which makes it a dynamic state which must always be set when a new PSO is bound.
+        inline bool IsShadingRateEnabled() const
+        {
+            return (shadingRateEnabled_ != 0);
+        }
+
     protected:
 
-        void BindOutputMergerAndStaticStates(ID3D12GraphicsCommandList* commandList);
+        void BindOutputMergerAndStaticStates(D3D12CommandContext& commandContext);
 
     private:
 
-        void BuildStaticStateBuffer(const ArrayView<Viewport>& staticViewports, const ArrayView<Scissor>& staticScissors);
-        void BuildStaticViewports(std::size_t numViewports, const Viewport* viewports, ByteBufferIterator& byteBufferIter);
-        void BuildStaticScissors(std::size_t numScissors, const Scissor* scissors, ByteBufferIterator& byteBufferIter);
-
+        void BuildStaticStateBuffer(const ArrayView<Viewport>& viewports, const ArrayView<Scissor>& scissors);
         void SetStaticViewportsAndScissors(ID3D12GraphicsCommandList* commandList);
 
     private:
 
         UINT                scissorEnabled_     : 1;
+        UINT                shadingRateEnabled_ : 1;
 
         UINT                stencilRefEnabled_  : 1;
         UINT                stencilRef_         : 8;
@@ -76,9 +83,7 @@ class D3D12RenderPSOBase : public D3D12PipelineState
         UINT                blendFactorEnabled_ : 1;
         FLOAT               blendFactor_[4]     = { 0.0f, 0.0f, 0.0f, 0.0f };
 
-        DynamicByteArray    staticStateBuffer_;
-        UINT                numStaticViewports_ = 0;
-        UINT                numStaticScissors_  = 0;
+        StaticStateBuffer   staticStateBuffer_;
 
 };
 

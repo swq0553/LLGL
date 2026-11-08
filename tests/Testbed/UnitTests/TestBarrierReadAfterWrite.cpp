@@ -16,6 +16,9 @@ The test must validate that the correct memory barriers are inserted between the
 */
 DEF_TEST( BarrierReadAfterWrite )
 {
+    if (!caps.features.hasComputeShaders)
+        return TestResult::Skipped;
+
     if (shaders[CSReadAfterWrite] == nullptr)
     {
         if (renderer->GetRendererID() == RendererID::Metal)
@@ -134,7 +137,7 @@ DEF_TEST( BarrierReadAfterWrite )
     renderer->WriteTexture(*tex2, firstPixelRegion, initialTex2Value);
 
     // Run compute shader invocations
-    cmdBuffer->Begin();
+    BEGIN();
     {
         // Initialize first element of buffers with propagate value
         cmdBuffer->FillBuffer(*buf1, 0, 0x00000000);
@@ -168,7 +171,7 @@ DEF_TEST( BarrierReadAfterWrite )
             }
         }
     }
-    cmdBuffer->End();
+    END();
 
     // Read back results
     TestResult result = TestResult::Passed;

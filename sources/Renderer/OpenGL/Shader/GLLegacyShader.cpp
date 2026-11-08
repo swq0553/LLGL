@@ -12,6 +12,7 @@
 #include "../GLTypes.h"
 #include "../GLObjectUtils.h"
 #include "../../../Core/Exception.h"
+#include <LLGL/Blob.h>
 
 
 namespace LLGL
@@ -28,18 +29,22 @@ GLLegacyShader::GLLegacyShader(const ShaderDescriptor& desc) :
 
 GLLegacyShader::~GLLegacyShader()
 {
-    glDeleteShader(GetID());
+    glDeleteShader(GetID(PermutationDefault));
+    if (GLuint id = GetID(PermutationFlippedYPosition))
+        glDeleteShader(id);
 }
 
 void GLLegacyShader::SetDebugName(const char* name)
 {
-    GLSetObjectLabel(GL_SHADER, GetID(), name);
+    GLSetObjectLabel(GL_SHADER, GetID(PermutationDefault), name);
+    if (GLuint id = GetID(GLShader::PermutationFlippedYPosition))
+        GLSetObjectLabelSubscript(GL_SHADER, id, name, "FlippedYPosition");
 }
 
 bool GLLegacyShader::Reflect(ShaderReflection& reflection) const
 {
     const Shader* shaders[] = { this };
-    GLShaderProgram intermediateProgram{ 1, shaders };
+    GLShaderProgram intermediateProgram{ shaders };
     GLShaderProgram::QueryReflection(intermediateProgram.GetID(), GetGLType(), reflection);
     return true;
 }
@@ -96,8 +101,8 @@ GLuint GLLegacyShader::CreateShaderPermutation(Permutation permutation)
 bool GLLegacyShader::FinalizeShaderPermutation(Permutation permutation)
 {
     /* Query compile status and log */
-    const bool status = GLLegacyShader::GetCompileStatus(GetID());
-    ReportStatusAndLog(status, GLLegacyShader::GetGLShaderLog(GetID()));
+    const bool status = GLLegacyShader::GetCompileStatus(GetID(permutation));
+    ReportStatusAndLog(status, GLLegacyShader::GetGLShaderLog(GetID(permutation)));
     return status;
 }
 
@@ -118,8 +123,8 @@ void GLLegacyShader::CompileSource(const ShaderDescriptor& shaderDesc)
 
         if (shaderDesc.sourceType == ShaderSourceType::CodeFile)
         {
-            const std::string fileContent = ReadFileString(shaderDesc.source);
-            GLShader::PatchShaderSource(sourceCallback, fileContent.c_str(), shaderDesc, enabledFlags);
+            const Blob fileContent = Blob::CreateFromFile(shaderDesc.source, true);
+            GLShader::PatchShaderSource(sourceCallback, static_cast<const char*>(fileContent.GetData()), shaderDesc, enabledFlags);
         }
         else
             GLShader::PatchShaderSource(sourceCallback, shaderDesc.source, shaderDesc, enabledFlags);
@@ -144,16 +149,16 @@ void GLLegacyShader::LoadBinary(const ShaderDescriptor& shaderDesc)
     if (HasExtension(GLExt::ARB_gl_spirv) && HasExtension(GLExt::ARB_ES2_compatibility))
     {
         /* Get shader binary */
-        std::vector<char>   fileContent;
-        const void*         binaryBuffer    = nullptr;
-        GLsizei             binaryLength    = 0;
+        Blob        fileContent;
+        const void* binaryBuffer    = nullptr;
+        GLsizei     binaryLength    = 0;
 
         if (shaderDesc.sourceType == ShaderSourceType::BinaryFile)
         {
             /* Load binary from file */
-            fileContent = ReadFileBuffer(shaderDesc.source);
-            binaryBuffer = fileContent.data();
-            binaryLength = static_cast<GLsizei>(fileContent.size());
+            fileContent = Blob::CreateFromFile(shaderDesc.source);
+            binaryBuffer = fileContent.GetData();
+            binaryLength = static_cast<GLsizei>(fileContent.GetSize());
         }
         else
         {

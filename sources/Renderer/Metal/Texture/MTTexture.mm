@@ -425,17 +425,22 @@ static void CopyIntermediateBufferToImageBuffer(
     std::size_t             srcBufferSize,
     ImageFormat             srcImageFormat,
     DataType                srcDataType,
-    const MutableImageView& dstImageView)
+    const MutableImageView& dstImageView,
+    const Extent3D&         extent)
 {
     /* Convert or copy intermediate shared buffer into output CPU buffer */
     ConvertImageBuffer(
         ImageView{ srcImageFormat, srcDataType, srcBuffer.GetBytes(), srcBufferSize },
         dstImageView,
+        extent,
         LLGL_MAX_THREAD_COUNT,
         true
     );
 }
 
+//TODO:
+// this function probably doesn't handle MIP levels and array layers correctly!
+// CopyIntermediateBufferToImageBuffer() only takes spatial dimensions, but not MIP levels or array layers.
 void MTTexture::ReadRegionFromPrivateMemory(
     const MTLRegion&            	    region,
     const TextureSubresource&           subresource,
@@ -449,6 +454,13 @@ void MTTexture::ReadRegionFromPrivateMemory(
     intermediateBuffer.Grow(layout.subresourceSize);
 
     MTLBlitOption options = GetMTLBlitOptionForImageFormat(dstImageView.format);
+
+    const Extent3D extent
+    {
+        static_cast<std::uint32_t>(region.size.width),
+        static_cast<std::uint32_t>(region.size.height),
+        static_cast<std::uint32_t>(region.size.depth)
+    };
 
     if (dstImageView.format == ImageFormat::Stencil)
     {
@@ -466,7 +478,8 @@ void MTTexture::ReadRegionFromPrivateMemory(
             /*srcBufferSize:*/  layout.subresourceSize,
             /*srcImageFormat:*/ ImageFormat::Stencil,
             /*srcDataType:*/    DataType::UInt8,
-            /*dstImageView:*/   dstImageView
+            /*dstImageView:*/   dstImageView,
+            /*extent:*/         extent
         );
     }
     else if (dstImageView.format == ImageFormat::DepthStencil)
@@ -489,7 +502,8 @@ void MTTexture::ReadRegionFromPrivateMemory(
             /*srcBufferSize:*/  layout.subresourceSize,
             /*srcImageFormat:*/ formatAttribs.format,
             /*srcDataType:*/    formatAttribs.dataType,
-            /*dstImageView:*/   dstImageView
+            /*dstImageView:*/   dstImageView,
+            /*extent:*/         extent
         );
     }
 }

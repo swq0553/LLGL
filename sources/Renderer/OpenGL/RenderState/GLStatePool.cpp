@@ -15,6 +15,9 @@
 #include "../Shader/GLLegacyShader.h"
 #include "../Shader/GLShaderProgram.h"
 
+#include "../Platform/GLContext.h"
+#include "../Platform/GLDriverBugMitigation.h"
+
 #ifdef LLGL_OPENGL
 #   include "../Shader/GLSeparableShader.h"
 #   include "../Shader/GLProgramPipeline.h"
@@ -204,35 +207,54 @@ static bool IsGLSeparableShader(const Shader* shader)
 
 // Returns true if the specified list of shaders has separable shaders.
 // Actually all shaders must be of the same type, but full validation is handled in the debug layer.
-static bool HasGLSeparableShaders(std::size_t numShaders, Shader* const* shaders)
+static bool HasGLSeparableShaders(ArrayView<Shader*> shaders)
 {
-    return (numShaders > 0 && IsGLSeparableShader(shaders[0]));
+    return (!shaders.empty() && IsGLSeparableShader(shaders[0]));
 }
 
 GLShaderPipelineSPtr GLStatePool::CreateShaderPipeline(
-    std::size_t             numShaders,
-    Shader* const*          shaders,
-    GLShader::Permutation   permutation,
-    GLPipelineCache*        pipelineCache)
+    ArrayView<Shader*>          shaders,
+    ArrayView<VertexAttribute>  inputVertexAttribs,
+    ArrayView<VertexAttribute>  outputVertexAttribs,
+    GLShader::Permutation       permutation,
+    GLPipelineCache*            pipelineCache,
+    Report*                     report)
 {
-    #ifdef LLGL_OPENGL
-    if (HasExtension(GLExt::ARB_separate_shader_objects) && HasGLSeparableShaders(numShaders, shaders))
+    #if LLGL_OPENGL && !LLGL_GL_ENABLE_OPENGL2X
+    if (HasExtension(GLExt::ARB_separate_shader_objects) && HasGLSeparableShaders(shaders))
     {
         return std::static_pointer_cast<GLShaderPipeline>(
-            CreateRenderStateObjectExt<GLProgramPipeline, GLPipelineSignature>(shaderPipelines_, numShaders, shaders, permutation)
+            CreateRenderStateObjectExt<GLProgramPipeline, GLPipelineSignature>(
+                shaderPipelines_, shaders, permutation
+            )
         );
     }
     else
     #endif
     {
         return std::static_pointer_cast<GLShaderPipeline>(
-            CreateRenderStateObjectExt<GLShaderProgram, GLPipelineSignature>(shaderPipelines_, numShaders, shaders, permutation, pipelineCache)
+            CreateRenderStateObjectExt<GLShaderProgram, GLPipelineSignature>(
+                shaderPipelines_, shaders, inputVertexAttribs, outputVertexAttribs, permutation, pipelineCache, report
+            )
         );
     }
 }
 
 void GLStatePool::ReleaseShaderPipeline(GLShaderPipelineSPtr&& shaderPipeline)
 {
+    #if LLGL_GL_DRIVER_BUG_NVIDIA_glDeleteProgram == LLGL_OPTION_ENABLED
+
+    /* If the GPU vendor cannot be reliably determined, always enable this path */
+    return;
+
+    #elif LLGL_GL_DRIVER_BUG_NVIDIA_glDeleteProgram == LLGL_OPTION_ENABLED_FOR_SPECIFIC_GPU_ONLY
+
+    /* Keep all GL shader programs alive. They are pooled anyway, so this shouldn't terribly increase the GL object count. */
+    if (GLContext::GetCurrentDeviceVendor() == DeviceVendor::NVIDIA)
+        return;
+
+    #endif
+
     ReleaseRenderStateObject<GLShaderPipeline>(
         shaderPipelines_,
         nullptr,

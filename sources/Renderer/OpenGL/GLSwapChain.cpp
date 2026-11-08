@@ -8,6 +8,7 @@
 #include "GLSwapChain.h"
 #include "GLRenderSystem.h"
 #include "../TextureUtils.h"
+#include "../../Core/Assertion.h"
 #include "Platform/GLContextManager.h"
 #include <LLGL/TypeInfo.h>
 #include <LLGL/Platform/Platform.h>
@@ -41,49 +42,76 @@ static GLint GetFramebufferHeight(const Extent2D& resolution)
     return static_cast<GLint>(resolution.height);
 }
 
+// Returns the number of color bits, either from the requested color format or the deprecated 'colorBits' field.
+static int GetGLColorBits(const SwapChainDescriptor& desc)
+{
+    if (IsColorFormat(desc.colorFormat))
+        return static_cast<int>(GetFormatAttribs(desc.colorFormat).bitSize);
+    return desc.colorBits;
+}
+
+// Returns the number of depth and stencil bits, either from the requested depth-stencil format or the deprecated bit-size fields.
+static void GetGLDepthStencilBits(const SwapChainDescriptor& desc, int& outDepthBits, int& outStencilBits)
+{
+    switch (desc.depthStencilFormat)
+    {
+        case Format::D16UNorm:
+            outDepthBits = 16; outStencilBits = 0;
+            break;
+        case Format::D24UNormS8UInt:
+            outDepthBits = 24; outStencilBits = 8;
+            break;
+        case Format::D32Float:
+            outDepthBits = 32; outStencilBits = 0;
+            break;
+        case Format::D32FloatS8X24UInt:
+            outDepthBits = 32; outStencilBits = 8;
+            break;
+        default:
+            outDepthBits = desc.depthBits; outStencilBits = desc.stencilBits;
+            break;
+    }
+}
+
 GLSwapChain::GLSwapChain(
     GLRenderSystem&                 renderSystem,
     const SwapChainDescriptor&      desc,
-    const std::shared_ptr<Surface>& surface,
-    GLContextManager&               contextMngr)
+    const std::shared_ptr<Surface>& surface)
 :
     SwapChain { desc }
 {
+    LLGL_ASSERT(GLContextManager::Get().IsInitialized(), "cannot initialize GLSwapChain before GLContextManager is initialized");
+
     /* Set up pixel format for GL context */
     GLPixelFormat pixelFormat;
-    pixelFormat.colorBits   = desc.colorBits;
-    pixelFormat.depthBits   = desc.depthBits;
-    pixelFormat.stencilBits = desc.stencilBits;
+    pixelFormat.colorBits   = GetGLColorBits(desc);
+    GetGLDepthStencilBits(desc, pixelFormat.depthBits, pixelFormat.stencilBits);
     pixelFormat.samples     = static_cast<int>(GetClampedSamples(desc.samples));
 
     #ifdef LLGL_OS_LINUX
-        #if LLGL_OPENGL_WAYLAND
-        NativeHandle nativeHandle = {};
-        if (surface)
-        {
-            surface->GetNativeHandle(&nativeHandle, sizeof(nativeHandle));
-        }
 
-        if (nativeHandle.type == NativeType::Wayland)
-        {
-            /* Setup surface for the swap-chain */
-            SetOrCreateSurface(surface, UTF8String{}, desc);
-        }
-        else
-        {
-        #endif
-            /* Set up surface for the swap-chain and pass native context handle */
-            NativeHandle windowContext = {};
-            ChooseGLXVisualAndGetX11WindowContext(pixelFormat, windowContext);
-            SetOrCreateSurface(surface, UTF8String{}, desc, &windowContext, sizeof(windowContext));
-        #if LLGL_OPENGL_WAYLAND
-        }
-        #endif
-
-    #else
+    #if LLGL_OPENGL_WAYLAND
+    NativeHandle nativeHandle = {};
+    if (surface && surface->GetNativeHandle(&nativeHandle, sizeof(nativeHandle)) && nativeHandle.type == NativeType::Wayland)
+    {
         /* Setup surface for the swap-chain */
         SetOrCreateSurface(surface, UTF8String{}, desc);
-    #endif
+    }
+    else
+    #endif // /LLGL_OPENGL_WAYLAND
+    {
+        /* Set up surface for the swap-chain and pass native context handle */
+        NativeHandle windowContext = {};
+        ChooseGLXVisualAndGetX11WindowContext(pixelFormat, windowContext);
+        SetOrCreateSurface(surface, UTF8String{}, desc, &windowContext, sizeof(windowContext));
+    }
+
+    #else // LLGL_OS_LINUX
+
+    /* Setup surface for the swap-chain */
+    SetOrCreateSurface(surface, UTF8String{}, desc);
+
+    #endif // /LLGL_OS_LINUX
 
     /*
     Cache resolution height after surface has been created,
@@ -92,7 +120,7 @@ GLSwapChain::GLSwapChain(
     framebufferHeight_ = GetFramebufferHeight(GetResolution());
 
     /* Create platform dependent OpenGL context */
-    context_ = contextMngr.AllocContext(&pixelFormat, /*acceptCompatibleFormat:*/ false, &GetSurface());
+    context_ = GLContextManager::Get().AllocContext(&pixelFormat, /*acceptCompatibleFormat:*/ false, &GetSurface());
     swapChainContext_ = GLSwapChainContext::Create(*context_, GetSurface());
     GLSwapChainContext::MakeCurrent(swapChainContext_.get());
 
@@ -157,7 +185,7 @@ bool GLSwapChain::MakeCurrent(GLSwapChain* swapChain)
 {
     if (swapChain)
     {
-        /* Make OpenGL context of the specified render contex current and notify the state manager */
+        /* Make OpenGL context of the specified render context current and notify the state manager */
         bool result = GLSwapChainContext::MakeCurrent(swapChain->swapChainContext_.get());
         GLStateManager::Get().ResetFramebufferHeight(swapChain->framebufferHeight_);
         return result;
@@ -171,7 +199,7 @@ bool GLSwapChain::MakeCurrent(GLSwapChain* swapChain)
  * ======= Private: =======
  */
 
-bool GLSwapChain::ResizeBuffersPrimary(const Extent2D& resolution)
+Extent2D GLSwapChain::ResizeBuffersPrimary(const Extent2D& resolution)
 {
     /* Notify GL context of a resize */
     swapChainContext_->Resize(resolution);
@@ -181,7 +209,7 @@ bool GLSwapChain::ResizeBuffersPrimary(const Extent2D& resolution)
     GetStateManager().ResetFramebufferHeight(height);
     framebufferHeight_ = height;
 
-    return true;
+    return resolution;
 }
 
 bool GLSwapChain::SetSwapInterval(int swapInterval)

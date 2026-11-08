@@ -1,0 +1,15 @@
+sources:
+  - source: "Example.hlsl"
+    entries:
+      - entry: "VSStencil"
+        profile: "vs_4_0"
+        targets: [glsl330core, glsl300es, spirv, metal]
+      - entry: "VSScene"
+        profile: "vs_4_0"
+        targets: [glsl330core, glsl300es, spirv, metal]
+      - entry: "PSScene"
+        profile: "ps_4_0"
+        targets: [glsl330core, glsl300es, spirv, metal]
+      - entry: "PSReflection"
+        profile: "ps_4_0"
+        targets: [glsl330core, glsl300es, spirv, metal]

@@ -11,6 +11,7 @@
 
 #include "D3D11PipelineState.h"
 #include <LLGL/ForwardDecls.h>
+#include "../../StaticStateBuffer.h"
 #include "../../DXCommon/ComPtr.h"
 #include <d3d11.h>
 #include <limits.h>
@@ -35,11 +36,11 @@ class D3D11GraphicsPSOBase : public D3D11PipelineState
 
     protected:
 
-        D3D11GraphicsPSOBase(const GraphicsPipelineDescriptor& desc);
+        D3D11GraphicsPSOBase(ID3D11Device* device, const GraphicsPipelineDescriptor& desc);
 
         void SetStaticViewportsAndScissors(D3D11StateManager& stateMngr);
 
-        // Returns the primitive toplogy for the 'IASetPrimitiveTopology' function.
+        // Returns the primitive topology for the 'IASetPrimitiveTopology' function.
         inline D3D11_PRIMITIVE_TOPOLOGY GetPrimitiveTopology() const
         {
             return primitiveTopology_;
@@ -75,13 +76,24 @@ class D3D11GraphicsPSOBase : public D3D11PipelineState
             return sampleMask_;
         }
 
+    public:
+
+        static void BuildInputLayout(
+            ArrayView<VertexAttribute>                  inAttributes,
+            DynamicVector<D3D11_INPUT_ELEMENT_DESC>&    outAttributes
+        );
+
+        static void BuildStreamOutput(
+            ArrayView<VertexAttribute>                  inAttributes,
+            DynamicVector<D3D11_SO_DECLARATION_ENTRY>&  outAttributes,
+            UINT                                        outBufferStrides[D3D11_SO_BUFFER_SLOT_COUNT],
+            UINT&                                       outNumBufferStrides
+        );
+
     private:
 
         void GetD3DNativeShaders(const GraphicsPipelineDescriptor& desc);
-
         void BuildStaticStateBuffer(const GraphicsPipelineDescriptor& desc);
-        void BuildStaticViewports(std::size_t numViewports, const Viewport* viewports, ByteBufferIterator& byteBufferIter);
-        void BuildStaticScissors(std::size_t numScissors, const Scissor* scissors, ByteBufferIterator& byteBufferIter);
 
     private:
 
@@ -100,9 +112,7 @@ class D3D11GraphicsPSOBase : public D3D11PipelineState
         FLOAT                           blendFactor_[4]     = { 0.0f, 0.0f, 0.0f, 0.0f };
         UINT                            sampleMask_         = UINT_MAX;
 
-        std::unique_ptr<char[]>         staticStateBuffer_;
-        UINT                            numStaticViewports_ = 0;
-        UINT                            numStaticScissors_  = 0;
+        StaticStateBuffer               staticStateBuffer_;
 
 };
 

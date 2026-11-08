@@ -10,7 +10,10 @@
 
 
 #include "MTPipelineState.h"
+#include "../../StaticStateBuffer.h"
+#include "../Shader/MTShader.h"
 #include <LLGL/Container/DynamicArray.h>
+#include <Metal/Metal.h>
 #include <cstdint>
 
 
@@ -43,6 +46,9 @@ class MTGraphicsPSO final : public MTPipelineState
             MTLScissorRect* outScissorRects,
             NSUInteger&     outScissorRectCount
         ) const;
+
+
+        static void BuildInputLayout(LLGL::ArrayView<VertexAttribute> vertexAttributes, bool isPatchControlPoint, MTLVertexDescriptor*& vertexDesc);
 
         // Returns the native primitive type.
         inline MTLPrimitiveType GetMTLPrimitiveType() const
@@ -105,12 +111,11 @@ class MTGraphicsPSO final : public MTPipelineState
 
         void CreateDepthStencilState(
             id<MTLDevice>                       device,
-            const GraphicsPipelineDescriptor&   desc
+            const GraphicsPipelineDescriptor&   desc,
+            const MTRenderPass*                 defaultRenderPass
         );
 
         void BuildStaticStateBuffer(const GraphicsPipelineDescriptor& desc);
-        void BuildStaticViewports(std::size_t numViewports, const Viewport* viewports, ByteBufferIterator& byteBufferIter);
-        void BuildStaticScissors(std::size_t numScissors, const Scissor* scissors, ByteBufferIterator& byteBufferIter);
 
     private:
 
@@ -140,9 +145,7 @@ class MTGraphicsPSO final : public MTPipelineState
         std::uint32_t               stencilFrontRef_        = 0;
         std::uint32_t               stencilBackRef_         = 0;
 
-        DynamicByteArray            staticStateBuffer_;
-        NSUInteger                  numStaticViewports_     = 0;
-        NSUInteger                  numStaticScissors_      = 0;
+        StaticStateBuffer           staticStateBuffer_;
 
 };
 

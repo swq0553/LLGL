@@ -56,14 +56,20 @@ class DbgRenderSystem final : public RenderSystem
 
     private:
 
+        struct VertexAttributeValidationContext;
+
+    private:
+
         void ValidateBindFlags(long flags, Format format = Format::Undefined, ResourceType resourceType = ResourceType::Undefined);
         void ValidateCPUAccessFlags(long flags, long validFlags, const char* contextDesc = nullptr);
         void ValidateMiscFlags(long flags, long validFlags, const char* contextDesc = nullptr);
         void ValidateResourceCPUAccess(long cpuAccessFlags, const CPUAccess access, const char* resourceTypeName);
 
+        void ValidateSwapChainDesc(const SwapChainDescriptor& swapChainDesc);
+
         void ValidateCommandBufferDesc(const CommandBufferDescriptor& commandBufferDesc);
 
-        void ValidateBufferDesc(const BufferDescriptor& bufferDesc, std::uint32_t* formatSizeOut = nullptr);
+        void ValidateBufferDesc(const BufferDescriptor& bufferDesc, std::uint32_t* outFormatSize = nullptr);
         void ValidateVertexAttributesForBuffer(const VertexAttribute& lhs, const VertexAttribute& rhs);
         void ValidateBufferSize(std::uint64_t size);
         void ValidateConstantBufferSize(std::uint64_t size);
@@ -92,6 +98,9 @@ class DbgRenderSystem final : public RenderSystem
         void ValidateAttachmentDesc(const AttachmentDescriptor& attachmentDesc, std::uint32_t colorTarget, bool isResolveAttachment, bool isDepthStencilAttachment);
 
         void ValidateShaderDesc(const ShaderDescriptor& shaderDesc);
+        void ValidateVertexAttributeIdentifier(VertexAttributeValidationContext& context, const VertexAttribute& attrib, std::size_t index, const std::string& labelPrefix);
+        void ValidateVertexInputAttribs(ArrayView<VertexAttribute> vertexAttribs, const char* inputName = nullptr, const char* debugName = nullptr);
+        void ValidateVertexOutputAttribs(ArrayView<VertexAttribute> vertexAttribs, const char* inputName = nullptr, const char* debugName = nullptr);
 
         void ValidatePipelineLayoutDesc(const PipelineLayoutDescriptor& pipelineLayoutDesc);
 
@@ -102,6 +111,9 @@ class DbgRenderSystem final : public RenderSystem
         void ValidateTextureForBinding(const DbgTexture& textureDbg, const BindingDescriptor& bindingDesc);
 
         void ValidateInputAssemblyDescriptor(const GraphicsPipelineDescriptor& pipelineStateDesc);
+        void ValidateDepthDescriptor(const DepthDescriptor& depthDesc);
+        void ValidateStencilFaceDescriptor(const StencilFaceDescriptor& stencilFaceDesc, bool isReferenceDynamic);
+        void ValidateStencilDescriptor(const StencilDescriptor& stencilDesc);
         void ValidateBlendTargetDescriptor(const BlendTargetDescriptor& blendTargetDesc, std::size_t idx);
         void ValidateBlendDescriptor(const BlendDescriptor& blendDesc, bool hasFragmentShader, bool hasDualSourceBlend);
         void ValidateGraphicsPipelineDesc(const GraphicsPipelineDescriptor& pipelineStateDesc);
@@ -111,6 +123,7 @@ class DbgRenderSystem final : public RenderSystem
         void ValidateFragmentShaderOutputWithRenderPass(DbgShader& fragmentShaderDbg, const FragmentShaderAttributes& fragmentAttribs, const DbgRenderPass& renderPass, bool hasDualSourceBlend);
         void ValidateFragmentShaderOutputWithoutRenderPass(DbgShader& fragmentShaderDbg, const FragmentShaderAttributes& fragmentAttribs, bool hasDualSourceBlend);
         void ValidatePipelineStateUniforms(const DbgPipelineLayout& pipelineLayout, const ArrayView<DbgShader*>& shaders, const char* psoDebugName);
+        void ValidateRenderTargetDesc(const RenderTargetDescriptor &renderTargetDesc);
 
         void Assert3DTextures();
         void AssertCubeTextures();

@@ -3,7 +3,8 @@
 set SOURCE_DIR=%~dp0
 set OUTPUT_DIR=build_win64
 set BUILD_TYPE=Release
-set BUILD_ARCH=x64
+REM Target architecture can be overridden, e.g. "set BUILD_ARCH=ARM64" before invoking this script
+if "%BUILD_ARCH%" == "" set BUILD_ARCH=x64
 set ENABLE_EXAMPLES=ON
 set ENABLE_TESTS=ON
 set STATIC_LIB=OFF
@@ -21,7 +22,7 @@ if not "%1" == "" (
     if "%2" == "" (
         set OUTPUT_DIR=%1
     ) else (
-        echo error: too many arguemnts
+        echo error: too many arguments
         echo usage: BuildWin64.bat [OUTPUT_DIR]
         exit 1
     )
@@ -31,7 +32,7 @@ if not exist "%OUTPUT_DIR%" (
     mkdir "%OUTPUT_DIR%"
 )
 
-REM Checkout external depenencies
+REM Checkout external dependencies
 set GAUSSIAN_LIB_DIR=GaussianLib\include
 
 if exist "external\%GAUSSIAN_LIB_DIR%" (

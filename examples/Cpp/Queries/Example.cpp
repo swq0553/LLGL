@@ -45,11 +45,12 @@ class Example_Queries : public ExampleBase
 
     Model                   model0;
 
-    struct Settings
+    struct alignas(16) Settings
     {
         Gs::Matrix4f        wvpMatrix;
         Gs::Matrix4f        wMatrix;
         LLGL::ColorRGBAf    color;
+        Gs::Vector3f        lightDir    = { 0.0f, 0.0f, -1.0f };
     }
     settings;
 
@@ -59,42 +60,46 @@ public:
         ExampleBase { "LLGL Example: Query" }
     {
         // Create all graphics objects
-        auto vertexFormat = CreateBuffers();
-        shaderPipeline = LoadStandardShaderPipeline({ vertexFormat });
+        CreateBuffers();
         CreatePipelines();
         CreateQueries();
+
+        // Update vectors for projection
+        settings.lightDir.z *= GetProjectionZAxis();
 
         // Show info
         LLGL::Log::Printf("press SPACE KEY to enable/disable animation of occluder\n");
     }
 
-    LLGL::VertexFormat CreateBuffers()
+    void CreateBuffers()
     {
-        // Specify vertex format
-        LLGL::VertexFormat vertexFormat;
-        vertexFormat.AppendAttribute({ "position", LLGL::Format::RGB32Float });
-        vertexFormat.AppendAttribute({ "normal",   LLGL::Format::RGB32Float });
-        vertexFormat.SetStride(sizeof(TexturedVertex));
-
         // Load models
-        auto vertices = LoadObjModel("Pyramid.obj");
+        auto vertices = Load3DModel("Pyramid.obj");
         model0.numVertices = static_cast<std::uint32_t>(vertices.size());
 
         // Create vertex and constant buffer
-        vertexBuffer = CreateVertexBuffer(vertices, vertexFormat);
+        vertexBuffer = CreateVertexBuffer(vertices, sizeof(TexturedVertex));
         constantBuffer = CreateConstantBuffer(settings);
-
-        return vertexFormat;
     }
 
     void CreatePipelines()
     {
+        shaderPipeline = LoadStandardShaderPipeline();
+
         // Create pipeline layout
-        pipelineLayout = renderer->CreatePipelineLayout(LLGL::Parse("cbuffer(1):vert:frag"));
+        pipelineLayout = renderer->CreatePipelineLayout(LLGL::Parse("cbuffer(Settings@1):vert:frag"));
+
+        // Specify vertex format
+        const LLGL::VertexAttribute vertexAttribs[] =
+        {
+            LLGL::VertexAttribute{ "position", LLGL::Format::RGB32Float, 0, offsetof(TexturedVertex, position), sizeof(TexturedVertex) },
+            LLGL::VertexAttribute{ "normal",   LLGL::Format::RGB32Float, 1, offsetof(TexturedVertex, normal  ), sizeof(TexturedVertex) },
+        };
 
         // Create graphics pipeline for occlusion query
         LLGL::GraphicsPipelineDescriptor pipelineDesc;
         {
+            pipelineDesc.inputVertexAttribs             = vertexAttribs;
             pipelineDesc.vertexShader                   = shaderPipeline.vs;
             pipelineDesc.fragmentShader                 = shaderPipeline.ps;
             pipelineDesc.pipelineLayout                 = pipelineLayout;
@@ -224,6 +229,8 @@ private:
 
     void UpdateScene()
     {
+        const float projZAxis = GetProjectionZAxis();
+
         // Update matrices in constant buffer
         static float anim0, anim1;
 
@@ -236,13 +243,13 @@ private:
         anim1 += 0.01f;
 
         modelTransform[0].LoadIdentity();
-        Gs::RotateFree(modelTransform[0], { 0, 1, 0 }, Gs::Deg2Rad(std::sin(anim0)*15.0f));
-        Gs::Translate(modelTransform[0], { 0, 0, 5 });
-        Gs::RotateFree(modelTransform[0], { 0, 1, 0 }, anim0*3);
+        Gs::RotateFree(modelTransform[0], { 0, 1, 0 }, Gs::Deg2Rad(std::sin(anim0)*15.0f) * projZAxis);
+        Gs::Translate(modelTransform[0], { 0, 0, 5 * projZAxis });
+        Gs::RotateFree(modelTransform[0], { 0, 1, 0 }, anim0*3 * projZAxis);
 
         modelTransform[1].LoadIdentity();
-        Gs::Translate(modelTransform[1], { 0, 0, 10 });
-        Gs::RotateFree(modelTransform[1], { 0, 1, 0 }, anim1*-1.5f);
+        Gs::Translate(modelTransform[1], { 0, 0, 10 * projZAxis });
+        Gs::RotateFree(modelTransform[1], { 0, 1, 0 }, anim1*-1.5f * projZAxis);
     }
 
     void RenderBoundingBoxes()
@@ -288,7 +295,7 @@ private:
         DrawModel(model0);
     }
 
-    void OnDrawFrame() override
+    void OnDrawFrame(float dt) override
     {
         UpdateScene();
 

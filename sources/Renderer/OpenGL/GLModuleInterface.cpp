@@ -10,75 +10,14 @@
 #include "Profile/GLProfile.h"
 
 
-namespace LLGL
-{
+/*
+Use indirection to solve macro expansion dependency.
+LLGL_OPENGL_PROFILE needs to be expanded before begin passed to LLGL_IMPLEMENT_RENDERER_MODULE().
+*/
+#define LLGL_IMPLEMENT_RENDERER_MODULE_OPENGL(PROFILE) \
+    LLGL_IMPLEMENT_RENDERER_MODULE(PROFILE, LLGL::GLProfile::GetRendererName(), LLGL::GLProfile::GetRendererID(), LLGL::GLRenderSystem, 100)
 
-
-#if defined(LLGL_OPENGLES3)
-#   define ModuleOpenGL ModuleOpenGLES3
-#elif defined(LLGL_WEBGL)
-#   define ModuleOpenGL ModuleWebGL
-#endif
-
-namespace ModuleOpenGL
-{
-    int GetRendererID()
-    {
-        return GLProfile::GetRendererID();
-    }
-
-    const char* GetModuleName()
-    {
-        return GLProfile::GetModuleName();
-    }
-
-    const char* GetRendererName()
-    {
-        return GLProfile::GetRendererName();
-    }
-
-    RenderSystem* AllocRenderSystem(const LLGL::RenderSystemDescriptor* renderSystemDesc)
-    {
-        return new GLRenderSystem{ *renderSystemDesc };
-    }
-} // /namespace ModuleOpenGL
-
-
-} // /namespace LLGL
-
-#ifndef LLGL_BUILD_STATIC_LIB
-
-extern "C"
-{
-
-LLGL_EXPORT int LLGL_RenderSystem_BuildID()
-{
-    return LLGL_BUILD_ID;
-}
-
-LLGL_EXPORT int LLGL_RenderSystem_RendererID()
-{
-    return LLGL::ModuleOpenGL::GetRendererID();
-}
-
-LLGL_EXPORT const char* LLGL_RenderSystem_Name()
-{
-    return LLGL::ModuleOpenGL::GetRendererName();
-}
-
-LLGL_EXPORT void* LLGL_RenderSystem_Alloc(const void* renderSystemDesc, int renderSystemDescSize)
-{
-    if (renderSystemDesc != nullptr && static_cast<std::size_t>(renderSystemDescSize) == sizeof(LLGL::RenderSystemDescriptor))
-    {
-        auto desc = static_cast<const LLGL::RenderSystemDescriptor*>(renderSystemDesc);
-        return LLGL::ModuleOpenGL::AllocRenderSystem(desc);
-    }
-    return nullptr;
-}
-
-} // /extern "C"
-
-#endif // /LLGL_BUILD_STATIC_LIB
+LLGL_IMPLEMENT_RENDERER_MODULE_OPENGL(LLGL_OPENGL_PROFILE);
 
 
 

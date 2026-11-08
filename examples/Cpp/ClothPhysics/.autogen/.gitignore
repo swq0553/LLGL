@@ -1,0 +1,3 @@
+# Strip shader permutations from repository to reduce commit noise
+ClothPhysics.RWTextures.*
+ClothPhysics.StreamOutput.*

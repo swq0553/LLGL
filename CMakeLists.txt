@@ -27,7 +27,10 @@ endif()
 
 # === Target platforms ===
 
-if("${CMAKE_GENERATOR_PLATFORM}" STREQUAL "x64")
+if("${CMAKE_GENERATOR_PLATFORM}" STREQUAL "x64" OR "${CMAKE_GENERATOR_PLATFORM}" STREQUAL "ARM64")
+    set(LLGL_BUILD_64BIT ON)
+elseif(CMAKE_SIZEOF_VOID_P EQUAL 8)
+    # Fallback for single-config generators (e.g. Ninja) that don't set CMAKE_GENERATOR_PLATFORM
     set(LLGL_BUILD_64BIT ON)
 else()
     set(LLGL_BUILD_64BIT OFF)
@@ -45,6 +48,10 @@ if(NOT DEFINED LLGL_TARGET_PLATFORM)
             message(FATAL_ERROR "Cannot build for Android platform: Missing environment variable 'ANDROID_NDK_ROOT'")
         endif()
         set(LLGL_ANDROID_PLATFORM ON)
+
+        # Google Play compatibility requires 16 KB page sizes now
+        # See https://developer.android.com/guide/practices/page-sizes?utm_source=android-studio-app&utm_medium=app
+        add_link_options("-Wl,-z,max-page-size=16384")
     elseif("${CMAKE_SYSTEM_NAME}" STREQUAL "WindowsStore")
         set(LLGL_TARGET_PLATFORM "${CMAKE_SYSTEM_NAME} ${CMAKE_SYSTEM_VERSION}")
         set(LLGL_UWP_PLATFORM ON)
@@ -72,7 +79,7 @@ endif()
 
 # === Project ===
 
-if(LLGL_UWP_PLATFORM)
+if(LLGL_UWP_PLATFORM OR LLGL_WASM_PLATFORM)
     set(CMAKE_CXX_STANDARD 17)
 else()
     set(CMAKE_CXX_STANDARD 11)
@@ -83,7 +90,7 @@ set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 
 # XCODE_SCHEME_WORKING_DIRECTORY (used per target) requires CMake 3.17.5
 if(APPLE AND ${CMAKE_VERSION} VERSION_GREATER_EQUAL "3.17.5")
-    # Once Xcode schemes are generated for example, we also have to enable them globally or the main projects will disappear
+    # Once Xcode schemes are generated, we also have to enable them globally or the main projects will disappear
     set(CMAKE_XCODE_GENERATE_SCHEME TRUE)
 endif()
 
@@ -121,6 +128,10 @@ macro(ADD_PROJECT_DEFINE TARGET_NAME IDENT)
     target_compile_definitions(${TARGET_NAME} PRIVATE "-D${IDENT}")
 endmacro()
 
+macro(ADD_PROJECT_DEFINE_VALUE TARGET_NAME IDENT VALUE)
+    target_compile_definitions(${TARGET_NAME} PRIVATE "-D${IDENT}=${VALUE}")
+endmacro()
+
 macro(ADD_DEBUG_DEFINE IDENT)
     # Requires CMake 3.12
     add_compile_definitions("$<$<CONFIG:Debug>:${IDENT}>")
@@ -155,6 +166,7 @@ if(NOT LLGL_UWP_PLATFORM)
     if(EMSCRIPTEN)
         option(LLGL_BUILD_RENDERER_WEBGL "Include WebGL renderer project" ON)
         option(LLGL_ENABLE_EMSCRIPTEN_PTHREADS "Build for Wasm platform with pthreads (USE_PTHREADS). This limits browser availability!" OFF)
+        option(LLGL_ENABLE_EXPLICIT_SWAP_CONTROL "Enable explicit swap control for WebGL. This requires offscreen framebuffer support in the browser." OFF)
     elseif(LLGL_MOBILE_PLATFORM)
         option(LLGL_BUILD_RENDERER_OPENGLES3 "Include OpenGLES 3 renderer project" ON)
     else()
@@ -176,6 +188,13 @@ if(WIN32)
     option(LLGL_BUILD_RENDERER_DIRECT3D12 "Include Direct3D12 renderer project" ON)
 endif()
 
+# OpenXR support (requires at least one compatible renderer; currently Vulkan, D3D11, D3D12).
+# Available on desktop (Windows/Linux/macOS) and Android (e.g. Quest, HTC Vive Focus).
+# iOS has no OpenXR runtime, UWP and WASM use different XR APIs.
+if(NOT LLGL_IOS_PLATFORM AND NOT LLGL_UWP_PLATFORM AND NOT EMSCRIPTEN)
+    option(LLGL_BUILD_XR_OPENXR "Include OpenXR support (LLGL::XRSystem)" OFF)
+endif()
+
 if(UNIX AND NOT APPLE)
     option(LLGL_LINUX_ENABLE_WAYLAND "Enable support for Wayland protocol" OFF)
 endif()
@@ -186,17 +205,28 @@ endif()
 
 option(LLGL_BUILD_WRAPPER_C99 "Include wrapper for C99" OFF)
 option(LLGL_BUILD_WRAPPER_CSHARP "Include wrapper for C# (requires LLGL_BUILD_WRAPPER_C99)" OFF)
+option(LLGL_BUILD_WRAPPER_GO "Include wrapper for Go (requires LLGL_BUILD_WRAPPER_C99)" OFF)
 
 if(NOT LLGL_BUILD_WRAPPER_C99)
     if(LLGL_BUILD_WRAPPER_CSHARP)
         message(SEND_ERROR "LLGL_BUILD_WRAPPER_CSHARP is enabled but not LLGL_BUILD_WRAPPER_C99; The C# wrapper depends on the C99 wrapper!")
     endif()
+    if(LLGL_BUILD_WRAPPER_GO)
+        message(SEND_ERROR "LLGL_BUILD_WRAPPER_GO is enabled but not LLGL_BUILD_WRAPPER_C99; The Go wrapper depends on the C99 wrapper!")
+    endif()
 endif()
+
+# === Optional Dependencies ===
+
+find_package(Python3 COMPONENTS Interpreter)
+
+# Check if DXC is available; Don't cache it here, the Python scripts have their own handling of finding this executable.
+find_program(TOOL_DXC_EXECUTABLE dxc DOC "Optional path to the DirectX Shader Compiler (dxc) executable")
 
 
 # === Functions ===
 
-# Filters sources files with a variadic argument for all directores:
+# Filters sources files with a variadic argument for all directories:
 # Example:
 #   find_source_files(OutputFiles "*.h;*.cpp" ${MyProjectDir}/Base ${MyProjectDir}/Extensions)
 function(find_source_files OUTPUT_LIST FILTERS)
@@ -208,7 +238,7 @@ function(find_source_files OUTPUT_LIST FILTERS)
     elseif("${FILTERS}" STREQUAL "OBJC")
         set(FILTERS "*.c;*.cpp;*.h;*.inl;*.m;*.mm")
     elseif("${FILTERS}" STREQUAL "RES")
-        set(FILTERS "*.c;*.cpp;*.h;*.inl;*.m;*.mm;*.metal;*.vert;*.frag;*.tesc;*.tese")
+        set(FILTERS "*.c;*.cpp;*.h;*.inl;*.m;*.mm;*.metal;*.vert;*.frag;*.tesc;*.tese;*.spv")
     elseif("${FILTERS}" STREQUAL "INC")
         set(FILTERS "*.h;*.hpp;*.inl")
     endif()
@@ -221,10 +251,10 @@ function(find_source_files OUTPUT_LIST FILTERS)
             list(APPEND FilteredProjectDirs "${ProjectSubdir}/${Filter}")
         endforeach()
     endforeach()
-    
+
     # Find all source files
     file(GLOB FilteredProjectFiles ${FilteredProjectDirs})
-    
+
     # Write filtered files to output variable
     set(${OUTPUT_LIST} ${${OUTPUT_LIST}} ${FilteredProjectFiles} PARENT_SCOPE)
 endfunction()
@@ -245,7 +275,7 @@ function(add_project_resource_files OUTPUT_LIST SRC_FOLDER)
             list(APPEND ResourceFiles "${SharedResourceFiles}" "${ProjectResourceFiles}")
         endif()
     endforeach()
-    
+
     # Write expanded resource filenames to output variable
     set(${OUTPUT_LIST} ${${OUTPUT_LIST}} ${ResourceFiles} PARENT_SCOPE)
 endfunction()
@@ -273,9 +303,9 @@ function(find_project_source_files OUTPUT_LIST SRC_FILES)
     else()
         # Find all source files for project
         if(APPLE)
-            find_source_files(ProjectFiles RES ${SRC_FILES})
+            find_source_files(ProjectFiles RES "${SRC_FILES}" "${SRC_FILES}/.autogen")
         else()
-            find_source_files(ProjectFiles CXX ${SRC_FILES})
+            find_source_files(ProjectFiles CXX "${SRC_FILES}")
         endif()
     endif()
 
@@ -346,13 +376,13 @@ function(add_llgl_module MODULE_NAME DEFINE_NAME SRC_FILES)
     else()
         add_library(${MODULE_NAME} SHARED ${SRC_FILES})
     endif()
-    
+
     # Keep track of all active module names
     append_global_property(LLGL_GLOBAL_MODULE_LIST None ${MODULE_NAME})
-    
+
     # Add basic link libraries and properties
     set_llgl_module_properties(${MODULE_NAME})
-    
+
     ADD_PROJECT_DEFINE(LLGL ${DEFINE_NAME})
 endfunction()
 
@@ -408,11 +438,36 @@ function(add_llgl_example_project PROJECT_NAME LINKER_LANG SRC_FILES LIB_FILES)
 
         # Filter shader files into "Shaders" folder
         set(SHADER_FILES "${SRC_FILES}")
-        list(FILTER SHADER_FILES INCLUDE REGEX ".+\\.(metal|vert|frag|tesc|tese)")
+        list(FILTER SHADER_FILES INCLUDE REGEX ".+\\.(metal|vert|frag|tesc|tese|spv)")
         source_group("Shaders" FILES ${SHADER_FILES})
 
-        # Set app icon for macOS and iOS
+        # Put resoure and shader files into MacOS bundle.
+        # Exclude Metal shaders to let Xcode generate the default.metallib library.
         set(BundleResourceFiles "${RES_FILES};${SHADER_FILES}")
+        set(ProjectDir "${CMAKE_CURRENT_SOURCE_DIR}/${PROJECT_BUNDLE_NAME}")
+        foreach(ResourceFile ${BundleResourceFiles})
+            get_filename_component(ResourceFileExt "${ResourceFile}" LAST_EXT)
+            get_filename_component(ResourceDir "${ResourceFile}" DIRECTORY)
+            if("${ResourceDir}" MATCHES "^${ProjectDir}" AND NOT "${ResourceFileExt}" STREQUAL ".metal")
+                # Preserve folder structure in MacOS bundle for resource files that are located in subfolders of the project directory
+                file(RELATIVE_PATH ResourceRelativeFilename "${ProjectDir}" "${ResourceFile}")
+                get_filename_component(ResourceRelativeDir "${ResourceRelativeFilename}" DIRECTORY)
+                if("${ResourceRelativeDir}" STREQUAL "")
+                    set(ResourceOutputDir "Resources")
+                else()
+                    set(ResourceOutputDir "Resources/${ResourceRelativeDir}")
+                endif()
+            else()
+                set(ResourceOutputDir "Resources")
+            endif()
+
+            set_source_files_properties(
+                "${ResourceFile}" PROPERTIES
+                MACOSX_PACKAGE_LOCATION "${ResourceOutputDir}"
+            )
+        endforeach()
+
+        # Set app icon for macOS and iOS
         if(LLGL_IOS_PLATFORM)
             set(BundleInfoPlistFile "${SHARED_PLATFORM_DIR}/iOS/IOSBundleInfo.plist.in")
             set(BundleIconFile "AppIcon.png")
@@ -433,7 +488,6 @@ function(add_llgl_example_project PROJECT_NAME LINKER_LANG SRC_FILES LIB_FILES)
             MACOSX_BUNDLE_ICON_FILE             "${BundleIconFile}"
             MACOSX_BUNDLE                       ON
             MACOSX_BUNDLE_INFO_PLIST            "${BundleInfoPlistFile}"
-            RESOURCE                            "${BundleResourceFiles}"
         )
     elseif(LLGL_ANDROID_PLATFORM)
         # Android project configurations
@@ -448,6 +502,8 @@ function(add_llgl_example_project PROJECT_NAME LINKER_LANG SRC_FILES LIB_FILES)
     set_target_properties(
         ${PROJECT_NAME} PROPERTIES
             DEBUG_POSTFIX               "D"
+            ARCHIVE_OUTPUT_DIRECTORY    "${LLGL_OUTPUT_DIR}"
+            LIBRARY_OUTPUT_DIRECTORY    "${LLGL_OUTPUT_DIR}"
             RUNTIME_OUTPUT_DIRECTORY    "${LLGL_OUTPUT_DIR}"
             BUILD_RPATH                 "\$ORIGIN"
     )
@@ -467,7 +523,7 @@ function(add_llgl_example_project PROJECT_NAME LINKER_LANG SRC_FILES LIB_FILES)
     else()
         set_target_properties(${PROJECT_NAME} PROPERTIES LINKER_LANGUAGE ${LINKER_LANG})
     endif()
-    
+
     # Configure working directory and project solution folder
     if(${PROJECT_NAME} MATCHES "Example_C99_+")
         string(SUBSTRING ${PROJECT_NAME} 12 -1 PROJECT_BASE_NAME)
@@ -488,6 +544,49 @@ function(add_llgl_example_project PROJECT_NAME LINKER_LANG SRC_FILES LIB_FILES)
         set_project_working_dir(${PROJECT_NAME} "${TEST_PROJECTS_DIR}/Testbed")
         set_target_properties(${PROJECT_NAME} PROPERTIES FOLDER "Tests")
     endif()
+endfunction()
+
+set_property(GLOBAL PROPERTY LLGL_SHADER_COMPILE_ROOTS "")
+
+# Registers a root directory for the unified COMPILE_SHADERS target.
+function(add_shader_compile_target SHADER_ROOT_DIR)
+    get_property(ShaderCompileRoots GLOBAL PROPERTY LLGL_SHADER_COMPILE_ROOTS)
+    list(APPEND ShaderCompileRoots "${SHADER_ROOT_DIR}")
+    set_property(GLOBAL PROPERTY LLGL_SHADER_COMPILE_ROOTS "${ShaderCompileRoots}")
+endfunction()
+
+# Creates one IDE-visible target with one translation command per registered root.
+function(create_compile_shaders_target)
+    if(Python3_FOUND AND TOOL_DXC_EXECUTABLE)
+        get_property(ShaderCompileRoots GLOBAL PROPERTY LLGL_SHADER_COMPILE_ROOTS)
+
+        # Only compile to DXBC for UWP platform
+        if(LLGL_UWP_PLATFORM)
+            set(SHADER_COMPILE_TARGET_ARGS "--targets" "dxbc")
+        else()
+            set(SHADER_COMPILE_TARGET_ARGS "--not-targets" "dxbc")
+        endif()
+
+        foreach(ShaderRootDir ${ShaderCompileRoots})
+            # Run `Python -u` in unbuffered mode so that stdout is immediately flushed
+            list(APPEND ShaderCompileCommands
+                COMMAND "${CMAKE_COMMAND}" -E chdir "${ShaderRootDir}"
+                    "${Python3_EXECUTABLE}" -u "${CMAKE_SOURCE_DIR}/scripts/TranslateShaders.py"
+                    --input "."
+                    --dxc-path "${TOOL_DXC_EXECUTABLE}"                     # Explicit path to DXC, to ensure SPIR-V output is supported
+                    -I "${CMAKE_SOURCE_DIR}/examples/Shared/Assets/Shaders" # Include directory for shared example shaders
+                    ${SHADER_COMPILE_TARGET_ARGS}
+            )
+        endforeach()
+
+        if(ShaderCompileCommands)
+            add_custom_target(COMPILE_SHADERS
+                ${ShaderCompileCommands}
+                VERBATIM
+            )
+            set_target_properties(COMPILE_SHADERS PROPERTIES FOLDER "Build")
+        endif()
+    endif() # Python3_FOUND
 endfunction()
 
 
@@ -549,7 +648,7 @@ if(LLGL_UNITY_BUILD)
     ADD_DEFINE(LLGL_UNITY_BUILD)
 endif()
 
-if (LLGL_LINUX_ENABLE_WAYLAND)
+if(LLGL_LINUX_ENABLE_WAYLAND)
     ADD_DEFINE(LLGL_LINUX_ENABLE_WAYLAND)
     set(SUMMARY_FLAGS ${SUMMARY_FLAGS} "Wayland")
 endif()
@@ -567,6 +666,9 @@ elseif(LLGL_MOBILE_PLATFORM)
         set(ARCH_ARM64 ON)
         set(SUMMARY_TARGET_ARCH "arm64")
     endif()
+elseif(WIN32 AND ("${CMAKE_GENERATOR_PLATFORM}" STREQUAL "ARM64" OR "${CMAKE_SYSTEM_PROCESSOR}" MATCHES "[Aa][Rr][Mm]64|[Aa][Aa][Rr][Cc][Hh]64"))
+    set(ARCH_ARM64 ON)
+    set(SUMMARY_TARGET_ARCH "arm64")
 elseif(APPLE OR LLGL_BUILD_64BIT)
     set(ARCH_AMD64 ON)
     set(SUMMARY_TARGET_ARCH "x86-64")
@@ -584,13 +686,25 @@ if(EMSCRIPTEN)
     endif()
 
     # TODO: Emscripten file system pulls in a large amount of code. Consider limiting file system support to examples and tests.
-    add_link_options("SHELL:-s FORCE_FILESYSTEM") # for examples
+    add_link_options("SHELL:-s FORCE_FILESYSTEM") # For examples
+
+    # Include Emscripten IndexedDB file system support (used by BrickPlay WebApp)
+    add_link_options("SHELL:-lidbfs.js")
 
     # LLGL needs at least WebGL 2.0
     add_link_options("SHELL:-s MIN_WEBGL_VERSION=2")
     add_link_options("SHELL:-s MAX_WEBGL_VERSION=2")
-    add_link_options("SHELL:-s OFFSCREEN_FRAMEBUFFER") # required for explicit swap control
     add_link_options("SHELL:-s ASSERTIONS")
+    add_link_options("SHELL:-s ALLOW_MEMORY_GROWTH") # Allow memory to grow as graphics apps can be quite demanding
+
+    if(LLGL_ENABLE_EXPLICIT_SWAP_CONTROL)
+        add_link_options("SHELL:-s OFFSCREEN_FRAMEBUFFER") # Required for explicit swap control
+        ADD_DEFINE(LLGL_ENABLE_EXPLICIT_SWAP_CONTROL)
+    endif()
+
+    # Add debug information for Emscripten debug builds
+    add_compile_options("$<$<CONFIG:Debug>:-g3>")
+    add_link_options("$<$<CONFIG:Debug>:-g3>")
 endif()
 
 
@@ -642,7 +756,11 @@ else()
             find_source_files(FilesPlatform         CXX     "${PROJECT_SOURCE_DIR}/sources/Platform/Android")
             find_source_files(FilesIncludePlatform  CXX     "${PROJECT_INCLUDE_DIR}/LLGL/Platform/Android")
         else()
-            find_source_files(FilesPlatform         CXX     "${PROJECT_SOURCE_DIR}/sources/Platform/Linux" "${PlatformPosixDir}")
+            if(LLGL_LINUX_ENABLE_WAYLAND)
+                find_source_files(FilesPlatform     CXX     "${PROJECT_SOURCE_DIR}/sources/Platform/Linux" "${PROJECT_SOURCE_DIR}/sources/Platform/Linux/X11" "${PROJECT_SOURCE_DIR}/sources/Platform/Linux/Wayland" "${PlatformPosixDir}")
+            else()
+                find_source_files(FilesPlatform     CXX     "${PROJECT_SOURCE_DIR}/sources/Platform/Linux" "${PROJECT_SOURCE_DIR}/sources/Platform/Linux/X11" "${PlatformPosixDir}")
+            endif()
             find_source_files(FilesIncludePlatform  CXX     "${PROJECT_INCLUDE_DIR}/LLGL/Platform/Linux")
         endif()
     endif()
@@ -683,7 +801,6 @@ endif()
 if(LLGL_ANDROID_PLATFORM)
     source_group("native_app_glue" FILES ${FilesAndroidNativeAppGlue})
 endif()
-
 
 # === Include directories ===
 
@@ -746,6 +863,71 @@ else()
     set_target_properties(LLGL PROPERTIES BUILD_RPATH "\$ORIGIN")
 endif()
 
+# Generate Wayland protocols
+if(LLGL_LINUX_ENABLE_WAYLAND)
+    find_program(WAYLAND_SCANNER_EXECUTABLE NAMES wayland-scanner)
+    if (NOT WAYLAND_SCANNER_EXECUTABLE)
+        message(FATAL_ERROR "Failed to find wayland-scanner")
+    endif()
+
+    file(MAKE_DIRECTORY ${PROJECT_SOURCE_DIR}/sources/Platform/Linux/Wayland/protocols)
+
+    # xdg-shell.xml
+    add_custom_command(
+        COMMAND ${WAYLAND_SCANNER_EXECUTABLE} private-code < /usr/share/wayland-protocols/stable/xdg-shell/xdg-shell.xml > xdg-shell-protocol.c
+        OUTPUT ${PROJECT_SOURCE_DIR}/sources/Platform/Linux/Wayland/protocols/xdg-shell-protocol.c
+        WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}/sources/Platform/Linux/Wayland/protocols
+        VERBATIM
+    )
+
+    add_custom_command(
+        COMMAND ${WAYLAND_SCANNER_EXECUTABLE} client-header < /usr/share/wayland-protocols/stable/xdg-shell/xdg-shell.xml > xdg-shell-client-protocol.h
+        OUTPUT ${PROJECT_SOURCE_DIR}/sources/Platform/Linux/Wayland/protocols/xdg-shell-client-protocol.h
+        WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}/sources/Platform/Linux/Wayland/protocols
+        VERBATIM
+    )
+
+    # xdg-decoration-unstable-v1.xml
+    add_custom_command(
+        COMMAND ${WAYLAND_SCANNER_EXECUTABLE} client-header < /usr/share/wayland-protocols/unstable/xdg-decoration/xdg-decoration-unstable-v1.xml > xdg-decoration-client-protocol.h
+        OUTPUT ${PROJECT_SOURCE_DIR}/sources/Platform/Linux/Wayland/protocols/xdg-decoration-client-protocol.h
+        WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}/sources/Platform/Linux/Wayland/protocols
+        VERBATIM
+    )
+
+    add_custom_command(
+        COMMAND ${WAYLAND_SCANNER_EXECUTABLE} private-code < /usr/share/wayland-protocols/unstable/xdg-decoration/xdg-decoration-unstable-v1.xml > xdg-decoration-protocol.c
+        OUTPUT ${PROJECT_SOURCE_DIR}/sources/Platform/Linux/Wayland/protocols/xdg-decoration-protocol.c
+        WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}/sources/Platform/Linux/Wayland/protocols
+        VERBATIM
+    )
+
+    # viewporter.xml
+    add_custom_command(
+        COMMAND ${WAYLAND_SCANNER_EXECUTABLE} client-header < /usr/share/wayland-protocols/stable/viewporter/viewporter.xml > viewporter-client-protocol.h
+        OUTPUT ${PROJECT_SOURCE_DIR}/sources/Platform/Linux/Wayland/protocols/viewporter-client-protocol.h
+        WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}/sources/Platform/Linux/Wayland/protocols
+        VERBATIM
+    )
+
+    add_custom_command(
+        COMMAND ${WAYLAND_SCANNER_EXECUTABLE} private-code < /usr/share/wayland-protocols/stable/viewporter/viewporter.xml > viewporter-protocol.c
+        OUTPUT ${PROJECT_SOURCE_DIR}/sources/Platform/Linux/Wayland/protocols/viewporter-protocol.c
+        WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}/sources/Platform/Linux/Wayland/protocols
+        VERBATIM
+    )
+
+    target_sources(
+        LLGL
+        PRIVATE ${PROJECT_SOURCE_DIR}/sources/Platform/Linux/Wayland/protocols/xdg-shell-client-protocol.h
+                ${PROJECT_SOURCE_DIR}/sources/Platform/Linux/Wayland/protocols/xdg-shell-protocol.c
+                ${PROJECT_SOURCE_DIR}/sources/Platform/Linux/Wayland/protocols/xdg-decoration-client-protocol.h
+                ${PROJECT_SOURCE_DIR}/sources/Platform/Linux/Wayland/protocols/xdg-decoration-protocol.c
+                ${PROJECT_SOURCE_DIR}/sources/Platform/Linux/Wayland/protocols/viewporter-client-protocol.h
+                ${PROJECT_SOURCE_DIR}/sources/Platform/Linux/Wayland/protocols/viewporter-protocol.c
+    )
+endif()
+
 include(GNUInstallDirs)
 target_include_directories(LLGL INTERFACE
                            $<BUILD_INTERFACE:${PROJECT_INCLUDE_DIR}>
@@ -767,6 +949,16 @@ elseif(EMSCRIPTEN)
     target_link_libraries(LLGL embind)
 elseif(UNIX)
     target_link_libraries(LLGL X11 pthread Xrandr)
+    if(LLGL_LINUX_ENABLE_WAYLAND)
+        find_library(LIBDECOR_LIBRARY NAMES libdecor-0.so)
+        find_path(LIBDECOR_INCLUDE_DIR NAMES libdecor-0)
+
+        if (NOT LIBDECOR_LIBRARY OR NOT LIBDECOR_INCLUDE_DIR)
+            message(FATAL_ERROR "libdecor not found. Please install it.")
+        endif()
+
+        target_link_libraries(LLGL wayland-client xkbcommon ${LIBDECOR_LIBRARY})
+    endif()
 #elseif(LLGL_UWP_PLATFORM)
 #    set_target_properties(LLGL PROPERTIES VS_WINRT_REFERENCES "Windows.Foundation.UniversalApiContract")
 endif()
@@ -787,6 +979,15 @@ if(LLGL_BUILD_RENDERER_OPENGL OR LLGL_BUILD_RENDERER_OPENGLES3 OR LLGL_BUILD_REN
     add_subdirectory(sources/Renderer/OpenGL)
 endif()
 
+# Resolve OpenXR dependency before adding renderer/XR subdirectories so the variables
+# (OPENXR_HEADER_TARGET, OPENXR_LOADER_TARGET) are visible to backends that link them.
+if(LLGL_BUILD_XR_OPENXR)
+    if(NOT (LLGL_BUILD_RENDERER_VULKAN OR LLGL_BUILD_RENDERER_DIRECT3D11 OR LLGL_BUILD_RENDERER_DIRECT3D12))
+        message(FATAL_ERROR "LLGL_BUILD_XR_OPENXR requires at least one XR-compatible renderer backend to be enabled: LLGL_BUILD_RENDERER_VULKAN, LLGL_BUILD_RENDERER_DIRECT3D11, or LLGL_BUILD_RENDERER_DIRECT3D12.")
+    endif()
+    include("${EXTERNAL_MODULE_DIR}/FindOpenXRDeps.cmake")
+endif()
+
 if(LLGL_BUILD_RENDERER_VULKAN)
     add_subdirectory(sources/Renderer/Vulkan)
 endif()
@@ -805,6 +1006,11 @@ endif()
 
 if(LLGL_BUILD_RENDERER_DIRECT3D12)
     add_subdirectory(sources/Renderer/Direct3D12)
+endif()
+
+# OpenXR module - depends on FindOpenXRDeps.cmake having been included earlier.
+if(LLGL_BUILD_XR_OPENXR)
+    add_subdirectory(sources/XR/OpenXR)
 endif()
 
 # Static libs must all be linked to the final apps (LLGL_BUILD_STATIC_LIB).
@@ -837,15 +1043,31 @@ if(LLGL_BUILD_WRAPPER_CSHARP)
     add_subdirectory(wrapper/CSharp)
 endif()
 
+# Wrapper: Go
+if(LLGL_BUILD_WRAPPER_GO)
+    configure_file("wrapper/Go/LLGL.pc.in" "${LLGL_OUTPUT_DIR}/LLGL.pc" @ONLY)
+endif()
+
 # Install targets, headers, and CMake config files
 get_property(LLGL_ALL_TARGETS GLOBAL PROPERTY LLGL_GLOBAL_MODULE_LIST)
 if(LLGL_BUILD_RENDERER_DIRECT3D11 OR LLGL_BUILD_RENDERER_DIRECT3D12)
     list(APPEND LLGL_ALL_TARGETS LLGL_DXCommon)
 endif()
 
-install(TARGETS ${LLGL_ALL_TARGETS} EXPORT LLGLTargets RUNTIME LIBRARY ARCHIVE)
+# Add build target for compiling shaders to project solution
+create_compile_shaders_target()
+
+# Use explicit destinations for RUNTIME, LIBRARY, and ARCHIVE to support older CMake versions (such as 3.13)
+install(
+    TARGETS ${LLGL_ALL_TARGETS}
+    EXPORT LLGLTargets
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
 install(DIRECTORY "${PROJECT_INCLUDE_DIR}/" DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
 install(EXPORT LLGLTargets NAMESPACE LLGL:: DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/LLGL")
+
 include(CMakePackageConfigHelpers)
 configure_package_config_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/cmake/Config.cmake.in"
@@ -866,7 +1088,11 @@ if(LLGL_BUILD_RENDERER_NULL)
 endif()
 
 if(LLGL_BUILD_RENDERER_OPENGL)
-    message(STATUS "Build Renderer: OpenGL")
+    if(DEFINED LLGL_GL_PROFILES)
+        message(STATUS "Build Renderer: ${LLGL_GL_PROFILES}")
+    else()
+        message(STATUS "Build Renderer: OpenGL")
+    endif()
 endif()
 
 if(LLGL_BUILD_RENDERER_OPENGLES3)
@@ -893,12 +1119,20 @@ if(LLGL_BUILD_RENDERER_DIRECT3D12)
     message(STATUS "Build Renderer: ${LLGL_D3D12_ENABLE_FEATURELEVEL}")
 endif()
 
+if(LLGL_BUILD_XR_OPENXR)
+    message(STATUS "Build XR Backend: OpenXR (${OPENXR_SOURCE})")
+endif()
+
 if(LLGL_BUILD_WRAPPER_C99)
     message(STATUS "Build Wrapper: C99")
 endif()
 
 if(LLGL_BUILD_WRAPPER_CSHARP)
     message(STATUS "Build Wrapper: C#")
+endif()
+
+if(LLGL_BUILD_WRAPPER_GO)
+    message(STATUS "Build Wrapper: Go")
 endif()
 
 if(LLGL_BUILD_EXAMPLES)
@@ -915,6 +1149,11 @@ endif()
 
 if(NOT "${SUMMARY_FLAGS}" STREQUAL "")
     message(STATUS "Options: ${SUMMARY_FLAGS}")
+endif()
+
+# Warnings about problematic configurations
+if (LLGL_BUILD_TESTS AND LLGL_BUILD_RENDERER_VULKAN AND NOT LLGL_VK_ENABLE_SPIRV_REFLECT)
+    message(WARNING "Vulkan shader reflection is disabled (LLGL_VK_ENABLE_SPIRV_REFLECT), but is required for Vulkan tests (LLGL_BUILD_TESTS).")
 endif()
 
 message(STATUS "~~~~~~~~~~~~~~~~~~~~~")

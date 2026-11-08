@@ -8,6 +8,7 @@
 #include "VKPipelineLayout.h"
 #include "VKPipelineLayoutPermutationPool.h"
 #include "VKPoolSizeAccumulator.h"
+#include "VKSanitizeBindingSlotContext.h"
 #include "../VKTypes.h"
 #include "../VKCore.h"
 #include "../VKStaticLimits.h"
@@ -38,11 +39,16 @@ VKPipelineLayout::VKPipelineLayout(VkDevice device, const PipelineLayoutDescript
     barrierFlags_               { desc.barrierFlags                    },
     flags_                      { 0                                    }
 {
+    /* Create pipeline barrier if any barrier flags are specified */
+    if ((barrierFlags_ & (BarrierFlags::StorageBuffer | BarrierFlags::StorageTexture)) != 0)
+        barrier_ = MakeUnique<VKPipelineBarrier>();
+
     /* Create Vulkan descriptor set layouts */
+    VKSanitizeBindingSlotContext sanitizeContext;
     if (!desc.heapBindings.empty())
-        CreateDescriptorSetLayout(device, desc.heapBindings, bindingTable_.heapBindings, setLayoutHeapBindings_);
+        CreateDescriptorSetLayout(device, desc.heapBindings, bindingTable_.heapBindings, setLayoutHeapBindings_, sanitizeContext);
     if (!desc.bindings.empty())
-        CreateDescriptorSetLayout(device, desc.bindings, bindingTable_.dynamicBindings, setLayoutDynamicBindings_);
+        CreateDescriptorSetLayout(device, desc.bindings, bindingTable_.dynamicBindings, setLayoutDynamicBindings_, sanitizeContext);
     if (!desc.staticSamplers.empty())
         CreateImmutableSamplers(device, desc.staticSamplers);
 
@@ -218,27 +224,31 @@ VKPipelineLayoutPermutationSPtr VKPipelineLayout::CreatePermutation(
     if (hasTexelBuffers)
     {
         /* Create permutation of set-layout bindings */
-        auto GetDescriptorTypeForBinding = [&shaders](const BindingSlot& slot) -> VkDescriptorType
+        auto UpdateDescriptorTypeForBinding = [&shaders](VkDescriptorType& outDescriptorType, const BindingSlot& slot) -> bool
         {
             for (Shader* shader : shaders)
             {
                 auto* shaderVK = LLGL_CAST(VKShader*, shader);
-                VkDescriptorType descriptorType = shaderVK->GetDescriptorTypeForBinding(slot);
-                if (descriptorType != VK_DESCRIPTOR_TYPE_MAX_ENUM)
-                    return descriptorType;
+                VkDescriptorType newDescriptorType = shaderVK->GetDescriptorTypeForBinding(slot);
+                if (newDescriptorType != VK_DESCRIPTOR_TYPE_MAX_ENUM)
+                {
+                    outDescriptorType = newDescriptorType;
+                    return true;
+                }
             }
-            return VK_DESCRIPTOR_TYPE_MAX_ENUM;
+            return false;
         };
 
-        auto UpdateSetLayoutDescriptorTypes = [&GetDescriptorTypeForBinding](
+        auto UpdateSetLayoutDescriptorTypes = [&UpdateDescriptorTypeForBinding](
             const std::vector<BindingSlot>&             inBindingSlots,
             std::vector<VkDescriptorSetLayoutBinding>&  setLayoutBindings) -> void
         {
             LLGL_ASSERT(inBindingSlots.size() == setLayoutBindings.size());
             for_range(i, inBindingSlots.size())
-                setLayoutBindings[i].descriptorType = GetDescriptorTypeForBinding(inBindingSlots[i]);
+                UpdateDescriptorTypeForBinding(setLayoutBindings[i].descriptorType, inBindingSlots[i]);
         };
 
+        //TODO: this needs to handle overridden binding slots, `srcSlots` can contain overlapping binding points
         UpdateSetLayoutDescriptorTypes(setBindingTables_[SetLayoutType_HeapBindings].srcSlots, permutationParams.setLayoutHeapBindings);
         UpdateSetLayoutDescriptorTypes(setBindingTables_[SetLayoutType_DynamicBindings].srcSlots, permutationParams.setLayoutDynamicBindings);
     }
@@ -331,6 +341,10 @@ static VkShaderStageFlags GetVkShaderStageFlags(long flags)
     if ((flags & StageFlags::GeometryStage      ) != 0) { bitmask |= VK_SHADER_STAGE_GEOMETRY_BIT;                }
     if ((flags & StageFlags::FragmentStage      ) != 0) { bitmask |= VK_SHADER_STAGE_FRAGMENT_BIT;                }
     if ((flags & StageFlags::ComputeStage       ) != 0) { bitmask |= VK_SHADER_STAGE_COMPUTE_BIT;                 }
+    #if VK_EXT_mesh_shader
+    if ((flags & StageFlags::TaskStage          ) != 0) { bitmask |= VK_SHADER_STAGE_TASK_BIT_EXT;                }
+    if ((flags & StageFlags::MeshStage          ) != 0) { bitmask |= VK_SHADER_STAGE_MESH_BIT_EXT;                }
+    #endif
 
     return bitmask;
 }
@@ -370,7 +384,7 @@ static VkDescriptorType GetVkDescriptorType(const BindingDescriptor& desc)
         default:
             break;
     }
-    VKTypes::MapFailed("ResourceType", "VkDescriptorType");
+    LLGL_TRAP_VK_MAP(ResourceType, desc.type, VkDescriptorType);
 }
 
 static void ConvertBindingDesc(VkDescriptorSetLayoutBinding& dst, const BindingDescriptor& src)
@@ -391,7 +405,8 @@ void VKPipelineLayout::CreateDescriptorSetLayout(
     VkDevice                                device,
     const std::vector<BindingDescriptor>&   inBindings,
     std::vector<VKLayoutBinding>&           outBindings,
-    VKDescriptorSetLayout&                  outDescriptorSetLayout)
+    VKDescriptorSetLayout&                  outDescriptorSetLayout,
+    VKSanitizeBindingSlotContext&           sanitizeContext)
 {
     /* Convert heap bindings to native descriptor set layout bindings and create Vulkan descriptor set layout */
     const std::size_t numBindings = inBindings.size();
@@ -405,7 +420,7 @@ void VKPipelineLayout::CreateDescriptorSetLayout(
             flags_ |= PSOLayoutFlag_HasNonUniformBuffers;
     }
 
-    outDescriptorSetLayout.Initialize(device, std::move(setLayoutBindings));
+    outDescriptorSetLayout.Initialize(device, std::move(setLayoutBindings), sanitizeContext);
     outDescriptorSetLayout.GetLayoutBindings(outBindings);
 
     /* Allocate slots for automatic */
@@ -414,10 +429,8 @@ void VKPipelineLayout::CreateDescriptorSetLayout(
 
 void VKPipelineLayout::AllocateDescriptorBarriers(std::vector<VKLayoutBinding>& bindings)
 {
-    if ((barrierFlags_ & (BarrierFlags::StorageBuffer | BarrierFlags::StorageTexture)) != 0)
+    if (barrier_)
     {
-        barrier_ = MakeUnique<VKPipelineBarrier>();
-
         for (VKLayoutBinding& binding : bindings)
         {
             /* Allocate barrier slots for RW buffers */

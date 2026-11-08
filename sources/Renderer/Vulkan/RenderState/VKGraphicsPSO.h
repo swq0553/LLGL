@@ -10,6 +10,7 @@
 
 
 #include "VKPipelineState.h"
+#include "VKVertexInputLayout.h"
 
 
 namespace LLGL
@@ -19,8 +20,9 @@ namespace LLGL
 // Vulkan graphics pipeline limitations structure.
 struct VKGraphicsPipelineLimits
 {
-    float lineWidthRange[2];
-    float lineWidthGranularity;
+    float   lineWidthRange[2];
+    float   lineWidthGranularity;
+    bool    hasFragmentShadingRate;
 };
 
 struct GraphicsPipelineDescriptor;
@@ -41,6 +43,16 @@ class VKGraphicsPSO final : public VKPipelineState
             PipelineCache*                      pipelineCache       = nullptr
         );
 
+        VKGraphicsPSO(
+            VkDevice                            device,
+            const RenderPass*                   defaultRenderPass,
+            const MeshPipelineDescriptor&       desc,
+            const VKGraphicsPipelineLimits&     limits,
+            PipelineCache*                      pipelineCache       = nullptr
+        );
+
+        static void BuildInputLayout(LLGL::ArrayView<VertexAttribute> attributes, VKVertexInputLayout& inputLayout);
+
         // Returns true if scissors are enabled.
         inline bool IsScissorEnabled() const
         {
@@ -55,12 +67,29 @@ class VKGraphicsPSO final : public VKPipelineState
 
     private:
 
-        bool CreateVkPipeline(
+        static void FillVertexInputStateCreateInfo(const VKVertexInputLayout& inputLayout, VkPipelineVertexInputStateCreateInfo& createInfo);
+
+        void FillAndAppendShaderStageCreateInfo(
+            Shader*                                             shader,
+            const char*                                         debugName,
+            SmallVector<VkPipelineShaderStageCreateInfo, 5>&    createInfos,
+            bool&                                               outShaderCreationFailed
+        );
+
+        bool CreateGraphicsVkPipeline(
             VkDevice                            device,
             const VKRenderPass&                 renderPass,
             const VKGraphicsPipelineLimits&     limits,
             const GraphicsPipelineDescriptor&   desc,
             VkPipelineCache                     pipelineCache   = VK_NULL_HANDLE
+        );
+
+        bool CreateMeshVkPipeline(
+            VkDevice                        device,
+            const VKRenderPass&             renderPass,
+            const VKGraphicsPipelineLimits& limits,
+            const MeshPipelineDescriptor&   desc,
+            VkPipelineCache                 pipelineCache   = VK_NULL_HANDLE
         );
 
     private:

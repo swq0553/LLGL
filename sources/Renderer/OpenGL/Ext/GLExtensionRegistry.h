@@ -91,6 +91,7 @@ enum class GLExt
     ARB_compatibility,                  // GL 3.1
     ARB_map_buffer_range,               // GL 3.0
     ARB_separate_shader_objects,        // GL 4.1
+    ARB_texture_compression_bptc,       // GL 3.2
 
     /* Khronos group extensions (KHR) */
     KHR_debug,
@@ -103,12 +104,15 @@ enum class GLExt
     EXT_copy_texture,                   // GL 1.2
     EXT_draw_buffers2,
     EXT_gpu_shader4,                    // GL 2.0
-    EXT_stencil_two_side,               //ATI_separate_stencil,
+    EXT_stencil_two_side,               // ATI_separate_stencil
     EXT_texture3D,                      // GL 1.2
     EXT_texture_array,                  // no procedures
     EXT_transform_feedback,             // GL 3.0
+    EXT_texture_filter_anisotropic,
+    EXT_color_buffer_float,             // WebGL 2.0
+    EXT_color_buffer_half_float,        // WebGL 2.0
 
-    /* OpenGLES specific extensions (GLES) */
+    /* OpenGLES/WebGL specific extensions */
     OES_tessellation_shader,            // GLES 3.2
 
     /* NVIDIA specific extensions (NV) */
@@ -116,7 +120,7 @@ enum class GLExt
     NV_conservative_raster,             // no procedures
     NV_transform_feedback,
 
-    /* Intel sepcific extensions (INTEL) */
+    /* Intel specific extensions (INTEL) */
     INTEL_conservative_rasterization,   // no procedures
 
     /* Substitute extensions for GL 2.x only - do *not* used in HasExtension() calls! */
@@ -132,13 +136,13 @@ void RegisterExtension(GLExt extension);
 
 // Disables GL extensions that are incompatible with other unsupported extensions.
 // For example, if GL_ARB_texture_storage is not supported, GL_ARB_direct_state_access cannot be supported either.
-// Such mismatches can occurr when individual extensions are disbaled either for debugging purposes or due to other external input.
+// Such mismatches can occur when individual extensions are disabled either for debugging purposes or due to other external input.
 void DisableIncompatibleExtensions();
 
 // Returns true if the specified OpenGL extension is supported.
 bool HasExtension(const GLExt extension);
 
-// Returns ture if GL_ARB_sampler_objects is supported. Shortcut for 'HasExtension(GLExt::ARB_sampler_objects)'.
+// Returns true if GL_ARB_sampler_objects is supported. Shortcut for 'HasExtension(GLExt::ARB_sampler_objects)'.
 bool HasNativeSamplers();
 
 

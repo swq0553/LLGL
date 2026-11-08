@@ -8,15 +8,18 @@
 #include "VKCore.h"
 #include "Ext/VKExtensions.h"
 #include "Ext/VKExtensionRegistry.h"
-#include "../../Core/StringUtils.h"
+#include "../../Core/Assertion.h"
 #include "../../Core/MacroUtils.h"
-#include "../../Core/Exception.h"
+#include "../../Core/StringUtils.h"
 #include <LLGL/Utils/ForRange.h>
 
 
 namespace LLGL
 {
 
+
+// Returned by VKGetMemoryTypeIndex() to indicate that the memory type was not found
+static constexpr std::uint32_t kInvalidMemoryIndex = ~0u;
 
 /* ----- Basic Functions ----- */
 
@@ -155,7 +158,7 @@ VkBool32 VKBoolean(bool value)
     return (value ? VK_TRUE : VK_FALSE);
 }
 
-#if VK_EXT_debug_marker
+#if VK_EXT_debug_utils
 
 void VKSetDebugName(VkDevice device, VkObjectType type, std::uint64_t handle, const char* name)
 {
@@ -173,7 +176,7 @@ void VKSetDebugName(VkDevice device, VkObjectType type, std::uint64_t handle, co
     }
 }
 
-#endif // /VK_EXT_debug_marker
+#endif // /VK_EXT_debug_utils
 
 
 /* ----- Query Functions ----- */
@@ -334,14 +337,26 @@ VkFormat VKFindSupportedImageFormat(VkPhysicalDevice device, const VkFormat* can
     LLGL_TRAP("failed to find suitable image format");
 }
 
-std::uint32_t VKFindMemoryType(const VkPhysicalDeviceMemoryProperties& memoryProperties, std::uint32_t memoryTypeBits, VkMemoryPropertyFlags properties)
+static std::uint32_t VKGetMemoryTypeIndex(const VkPhysicalDeviceMemoryProperties &memoryProperties, std::uint32_t memoryTypeBits, VkMemoryPropertyFlags properties)
 {
     for_range(i, memoryProperties.memoryTypeCount)
     {
         if ((memoryTypeBits & (1 << i)) != 0 && (memoryProperties.memoryTypes[i].propertyFlags & properties) == properties)
             return i;
     }
-    LLGL_TRAP("failed to find suitable Vulkan memory type");
+    return kInvalidMemoryIndex;
+}
+
+bool VKHasMemoryType(const VkPhysicalDeviceMemoryProperties& memoryProperties, std::uint32_t memoryTypeBits, VkMemoryPropertyFlags properties)
+{
+    return VKGetMemoryTypeIndex(memoryProperties, memoryTypeBits, properties) != kInvalidMemoryIndex;
+}
+
+std::uint32_t VKFindMemoryType(const VkPhysicalDeviceMemoryProperties& memoryProperties, std::uint32_t memoryTypeBits, VkMemoryPropertyFlags properties)
+{
+    const std::uint32_t index = VKGetMemoryTypeIndex(memoryProperties, memoryTypeBits, properties);
+    LLGL_ASSERT(index != kInvalidMemoryIndex, "failed to find suitable Vulkan memory type");
+    return index;
 }
 
 

@@ -23,7 +23,7 @@ namespace LLGL
 {
 
 
-// OpenGLES extension map type: Maps the extension name to boolean indicating whether or not the extension was loaded successully.
+// OpenGLES extension map type: Maps the extension name to boolean indicating whether or not the extension was loaded successfully.
 using GLESExtensionMap = std::map<std::string, bool>;
 
 /* --- Internal functions --- */
@@ -227,7 +227,7 @@ static void EnableGLESExtension(GLExt ext, const char* name)
     g_loadedOpenGLESExtensions.insert(name);
 }
 
-bool LoadSupportedOpenGLExtensions(bool isCoreProfile, bool abortOnFailure)
+bool LoadSupportedOpenGLExtensions(GLContext& /*context*/, bool isCoreProfile, bool abortOnFailure)
 {
     /* Only load GL extensions once */
     if (g_OpenGLESExtensionsLoaded)
@@ -314,6 +314,8 @@ bool LoadSupportedOpenGLExtensions(bool isCoreProfile, bool abortOnFailure)
         ENABLE_GLEXT(ARB_texture_buffer_object);
         ENABLE_GLEXT(ARB_texture_buffer_range);
     }
+
+    //TODO: add optional GLES extensions, e.g. EXT_texture_filter_anisotropic
 
     #undef ENABLE_GLEXT
 

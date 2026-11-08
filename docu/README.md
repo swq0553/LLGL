@@ -42,10 +42,6 @@ On Windows, MSYS2 can be used to run *BuildAndroid.sh*.
     <img src="Showcase/Showcase_Build_AndroidStudio.png" alt="Screenshot missing: AndroidStudio Build Showcase" style="max-width:600px;width:70%;height:auto;">
 </p>
 
-#### Known issues
-
-Currently only the GLES backend is supported for Android. Vulkan backend compiles but is not stable (synchronization issues are visible).
-
 
 ## GNU/Linux
 
@@ -74,23 +70,29 @@ Use `$ ./BuildMsys2.sh -h` in a command prompt for more details.
 
 ## WebAssembly (Wasm)
 
-*- This is in an experimental state -*
-
-LLGL can be built for the web using [Emscripten](https://emscripten.org/), [WebAssembly](https://webassembly.org/), and [WebGL 2](https://www.khronos.org/webgl/).
+LLGL can be built for the web using [Emscripten](https://emscripten.org/) 3.1.4x or later, [WebAssembly](https://webassembly.org/), and [WebGL 2](https://www.khronos.org/webgl/).
 When building on Windows, it is recommended to use the [Windows Subsystem for Linux (WSL)](https://ubuntu.com/desktop/wsl) to run the *BuildWasm.sh* bash script.
 The generated example projects can be tested by running a local web server from the output folder, for instance with [Node.js](https://nodejs.org/) or Python `http.server` module:
 ```
 $ python -m http.server
 ```
 Then launch your web browser of choice and open the URL http://localhost:8000/.
+The *scripts/DeployHTML5WebPages.sh* script can simplify the build and bundle steps.
 
 <p align="center">
     <img src="Showcase/Showcase_Build_Wasm.png" alt="Screenshot missing: HTML5 Example Showcase" style="max-width:600px;width:70%;height:auto;">
 </p>
 
-#### Known issues
 
-The **WebGL backend does not work correctly on Safari**. There is a workaround which detects Safari browsers to disable anti-aliasing which mitigates the issue on Intel based Macs.
-On all ARM based Macs and iOS devices, Safari shows synchronization issues that mostly affect buffer updates via `glBufferSubData` making it look as if staging buffers
-are not synchronized between CPU and GPU, even though WebGL does not have a concept of staging buffers like Vulkan or D3D.
+## Static Linking
+
+If you want to build LLGL as a static library and link your project against it, you'll have to link against the core library (*LLGL.lib*/ *libLLGL.a*) and all backends that are compiled into that core library. So any backend that has been enabled via the respective CMake option needs to be linked against, for example the Vulkan backend (*LLGL_Vulkan.lib*/ *libLLGL_Vulkan.a*) if `LLGL_BUILD_RENDERER_VULKAN` is enabled. At the time of writing, CMake does not provide a straightforward method to build all submodules into a single static library. Another caveat is that the core library and its backends have a cyclic dependency when built as static library. This makes it necessary for some compilers such as GCC to link against the core library twice, once before all backends and a second time afterwards. In CMake, this may look like this:
+```CMake
+set(MyProjectLibraryDependencies
+    libLLGL.a        # First reference to LLGL is required for the backends to use LLGL's core functionality
+    libLLGL_Vulkan.a # Reference to Vulkan backend if LLGL_BUILD_RENDERER_VULKAN is enabled
+    libLLGL_OpenGL.a # Reference to OpenGL backend if LLGL_BUILD_RENDERER_OPENGL is enabled
+    libLLGL.a        # Second reference to LLGL is required for it to instantiate the backends
+)
+```
 

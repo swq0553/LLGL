@@ -21,12 +21,16 @@
 #include "VKCore.h"
 #include "VKTypes.h"
 #include "VKInitializers.h"
+#include "Command/VKCommandBufferRegistry.h"
+#include "Texture/VKImageUtils.h"
 #include "RenderState/VKPredicateQueryHeap.h"
 #include "RenderState/VKComputePSO.h"
 #include "RenderState/VKPipelineLayoutPermutationPool.h"
 #include "Shader/VKShaderModulePool.h"
 #include "../../Platform/Debug.h"
 #include <LLGL/ImageFlags.h>
+#include <LLGL/Log.h>
+#include <cstring>
 #include <limits>
 
 #include <LLGL/Backend/Vulkan/NativeHandle.h>
@@ -52,7 +56,7 @@ VKRenderSystem::VKRenderSystem(const RenderSystemDescriptor& renderSystemDesc) :
     isDebugLayerEnabled_   { LLGL::IsDebugLayerEnabled(renderSystemDesc.flags)        },
     isBreakOnErrorEnabled_ { LLGL::IsDebugBreakOnErrorEnabled(renderSystemDesc.flags) }
 {
-    /* Extract optional renderer configuartion */
+    /* Extract optional renderer configuration */
     auto* rendererConfigVK = GetRendererConfiguration<RendererConfigurationVulkan>(renderSystemDesc);
 
     constexpr long preferredDeviceMask = (RenderSystemFlags::PreferNVIDIA | RenderSystemFlags::PreferAMD | RenderSystemFlags::PreferIntel);
@@ -65,20 +69,34 @@ VKRenderSystem::VKRenderSystem(const RenderSystemDescriptor& renderSystemDesc) :
         /* Store weak references to native handles */
         instance_ = VKPtr<VkInstance>{ customNativeHandle->instance };
         if (isDebugLayerEnabled_)
-            CreateDebugReportCallback();
+        {
+            // The instance was created externally (e.g. by the OpenXR graphics binding); we can only
+            // install the debug messenger if that creator enabled VK_EXT_debug_utils. Probe via the
+            // procaddr instead of throwing, so a debug-less external instance degrades to "no callback"
+            // rather than aborting startup.
+            if (vkGetInstanceProcAddr(instance_, "vkCreateDebugUtilsMessengerEXT") != nullptr)
+                CreateDebugMessenger();
+            else
+                Log::Errorf(
+                    "RenderSystemFlags::DebugDevice was requested but the externally-supplied Vulkan instance "
+                    "lacks VK_EXT_debug_utils; no Vulkan debug messenger will be installed.\n"
+                );
+        }
         VKLoadInstanceExtensions(instance_, supportedInstanceExtensions_);
-        if (!PickPhysicalDevice(preferredDeviceFlags, customNativeHandle->physicalDevice))
+        if (!PickPhysicalDevice(rendererConfigVK, preferredDeviceFlags, customNativeHandle->physicalDevice))
             return;
         CreateLogicalDevice(customNativeHandle->device);
     }
     else
     {
         /* Create Vulkan instance and device objects */
+        if (!AppendUserInstanceExtensions(rendererConfigVK))
+            return;
         CreateInstance(rendererConfigVK);
         if (isDebugLayerEnabled_)
-            CreateDebugReportCallback();
+            CreateDebugMessenger();
         VKLoadInstanceExtensions(instance_, supportedInstanceExtensions_);
-        if (!PickPhysicalDevice(preferredDeviceFlags))
+        if (!PickPhysicalDevice(rendererConfigVK, preferredDeviceFlags))
             return;
         CreateLogicalDevice();
     }
@@ -108,13 +126,13 @@ VKRenderSystem::~VKRenderSystem()
 SwapChain* VKRenderSystem::CreateSwapChain(const SwapChainDescriptor& swapChainDesc, const std::shared_ptr<Surface>& surface)
 {
     return swapChains_.emplace<VKSwapChain>(
-        instance_, physicalDevice_, device_, *deviceMemoryMngr_, swapChainDesc, surface, GetRendererInfo()
+        instance_, physicalDevice_, device_, *deviceMemoryMngr_, device_.GetGraphicsQueue(), swapChainDesc, surface, GetRendererInfo()
     );
 }
 
 void VKRenderSystem::Release(SwapChain& swapChain)
 {
-    swapChains_.erase(&swapChain);
+    SyncGPUAndReleaseResource(swapChains_, swapChain);
 }
 
 /* ----- Command queues ----- */
@@ -129,13 +147,13 @@ CommandQueue* VKRenderSystem::GetCommandQueue()
 CommandBuffer* VKRenderSystem::CreateCommandBuffer(const CommandBufferDescriptor& commandBufferDesc)
 {
     return commandBuffers_.emplace<VKCommandBuffer>(
-        physicalDevice_, device_, device_.GetVkQueue(), *deviceMemoryMngr_, device_.GetQueueFamilyIndices(), commandBufferDesc
+        physicalDevice_, device_, device_.GetGraphicsQueue(), *deviceMemoryMngr_, device_.GetQueueFamilyIndices(), commandBufferDesc
     );
 }
 
 void VKRenderSystem::Release(CommandBuffer& commandBuffer)
 {
-    commandBuffers_.erase(&commandBuffer);
+    SyncGPUAndReleaseResource(commandBuffers_, commandBuffer);
 }
 
 /* ----- Buffers ------ */
@@ -186,14 +204,15 @@ Buffer* VKRenderSystem::CreateBuffer(const BufferDescriptor& bufferDesc, const v
     return bufferVK;
 }
 
-BufferArray* VKRenderSystem::CreateBufferArray(std::uint32_t numBuffers, Buffer* const * bufferArray)
+BufferArray* VKRenderSystem::CreateBufferArray(ArrayView<VertexBufferView> bufferViews)
 {
-    RenderSystem::AssertCreateBufferArray(numBuffers, bufferArray);
-    return bufferArrays_.emplace<VKBufferArray>(numBuffers, bufferArray);
+    return bufferArrays_.emplace<VKBufferArray>(bufferViews);
 }
 
 void VKRenderSystem::Release(Buffer& buffer)
 {
+    SyncGPU();
+
     /* Release device memory regions for primary buffer and internal staging buffer, then release buffer object */
     auto& bufferVK = LLGL_CAST(VKBuffer&, buffer);
     bufferVK.GetDeviceBuffer().ReleaseMemoryRegion(*deviceMemoryMngr_);
@@ -304,10 +323,10 @@ static VkImageLayout FindOptimalInitialVkImageLayout(Format format, long bindFla
         return VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     if ((bindFlags & BindFlags::DepthStencilAttachment) != 0)
     {
-        if (IsStencilFormat(format))
-            return VK_IMAGE_LAYOUT_STENCIL_ATTACHMENT_OPTIMAL;
-        else
-            return VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        /* The aspect-specific layouts (DEPTH_ATTACHMENT_OPTIMAL / STENCIL_ATTACHMENT_OPTIMAL) require Vulkan 1.2
+           or VK_KHR_separate_depth_stencil_layouts, neither of which this backend requires, so use the combined
+           layout. It is valid for depth-only, stencil-only and combined formats alike. */
+        return VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
     }
     if ((bindFlags & BindFlags::Sampled) != 0)
         return VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -316,9 +335,10 @@ static VkImageLayout FindOptimalInitialVkImageLayout(Format format, long bindFla
 
 Texture* VKRenderSystem::CreateTexture(const TextureDescriptor& textureDesc, const ImageView* initialImage)
 {
-    /* Determine size of image for staging buffer */
+    /* Determine size of image for staging buffer (block-aware overload: the texel-count one
+       returns 0 for extents that don't tile the block size, e.g. pow2 extents with 6x6 blocks) */
     const std::uint32_t imageSize       = NumMipTexels(textureDesc, 0);
-    const std::size_t   initialDataSize = GetMemoryFootprint(textureDesc.format, imageSize);
+    const std::size_t   initialDataSize = GetMemoryFootprint(textureDesc.type, textureDesc.format, textureDesc.extent, TextureSubresource{ 0, textureDesc.arrayLayers, 0, 1 });
     const std::uint32_t bytesPerPixel   = static_cast<std::uint32_t>(GetMemoryFootprint(textureDesc.format, 1));
     const auto&         formatAttribs   = GetFormatAttribs(textureDesc.format);
     const Extent3D      extent          = CalcTextureExtent(textureDesc.type, textureDesc.extent, textureDesc.arrayLayers);
@@ -490,6 +510,8 @@ Texture* VKRenderSystem::CreateTexture(const TextureDescriptor& textureDesc, con
 
 void VKRenderSystem::Release(Texture& texture)
 {
+    SyncGPU();
+
     /* Release device memory region, then release texture object */
     auto& textureVK = LLGL_CAST(VKTexture&, texture);
     deviceMemoryMngr_->Release(textureVK.GetMemoryRegion());
@@ -504,12 +526,18 @@ void VKRenderSystem::WriteTexture(Texture& texture, const TextureRegion& texture
     const TextureSubresource&   subresource     = textureRegion.subresource;
   //const Offset3D              offset          = CalcTextureOffset(textureVK.GetType(), textureRegion.offset, subresource.baseArrayLayer);
     const Extent3D              extent          = CalcTextureExtent(textureVK.GetType(), textureRegion.extent, subresource.numArrayLayers);
-    const Format                format          = VKTypes::Unmap(textureVK.GetVkFormat());
+    const Format                format          = textureVK.GetFormat();
 
     VkImage                     image           = textureVK.GetVkImage();
     const std::uint32_t         imageSize       = extent.width * extent.height * extent.depth;
     const void*                 imageData       = nullptr;
-    const VkDeviceSize          imageDataSize   = static_cast<VkDeviceSize>(GetMemoryFootprint(format, imageSize));
+    /* Block-aware size: the texel-count overload returns 0 for regions that don't tile the
+       block size (pow2 extents with 6x6 blocks, or MIP levels smaller than one block).
+       NOTE: the extent-based overload treats its extent as the base (MIP 0) extent, but
+       textureRegion.extent is already resolved to the region's MIP level - so the MIP range
+       must be rebased to 0 or the size is scaled down a second time. */
+    const TextureSubresource    sizeSubresource { subresource.baseArrayLayer, subresource.numArrayLayers, 0, subresource.numMipLevels };
+    const VkDeviceSize          imageDataSize   = static_cast<VkDeviceSize>(GetMemoryFootprint(textureVK.GetType(), format, textureRegion.extent, sizeSubresource));
     const std::uint32_t         bytesPerPixel   = static_cast<std::uint32_t>(GetMemoryFootprint(format, 1));
 
     /* Check if image data must be converted */
@@ -586,14 +614,36 @@ void VKRenderSystem::ReadTexture(Texture& texture, const TextureRegion& textureR
     const TextureSubresource&   subresource     = textureRegion.subresource;
   //const Offset3D              offset          = CalcTextureOffset(textureVK.GetType(), textureRegion.offset, subresource.baseArrayLayer);
     const Extent3D              extent          = CalcTextureExtent(textureVK.GetType(), textureRegion.extent, subresource.numArrayLayers);
-    const Format                format          = VKTypes::Unmap(textureVK.GetVkFormat());
+    const Format                format          = textureVK.GetFormat();
     const FormatAttributes&     formatAttribs   = GetFormatAttribs(format);
     const std::size_t           imageNumTexels  = extent.width * extent.height * extent.depth;
-    const VkDeviceSize          imageDataSize   = static_cast<VkDeviceSize>(GetMemoryFootprint(format, imageNumTexels));
+
+    VkDeviceSize stagingBufferSize      = 0;
+    VkDeviceSize depthBufferOffset      = 0;
+    VkDeviceSize depthBufferSize        = 0;
+    VkDeviceSize stencilBufferOffset    = 0;
+    VkDeviceSize stencilBufferSize      = 0;
+
+    if (IsDepthAndStencilFormat(format))
+    {
+        depthBufferSize     = static_cast<VkDeviceSize>(GetMemoryFootprint(formatAttribs.format, formatAttribs.dataType, imageNumTexels));
+        stencilBufferSize   = static_cast<VkDeviceSize>(GetMemoryFootprint(ImageFormat::Stencil, DataType::UInt8, imageNumTexels));
+
+        stencilBufferOffset = 0;
+        depthBufferOffset   = GetAlignedSize<VkDeviceSize>(stencilBufferSize, 4u);
+        stagingBufferSize   = GetAlignedSize<VkDeviceSize>(depthBufferOffset + depthBufferSize, 4u);
+    }
+    else
+    {
+        /* Block-aware size; MIP range rebased to 0 - textureRegion.extent is already the
+           region's MIP-level extent (see WriteTexture) */
+        const TextureSubresource sizeSubresource{ subresource.baseArrayLayer, subresource.numArrayLayers, 0, subresource.numMipLevels };
+        stagingBufferSize = static_cast<VkDeviceSize>(GetMemoryFootprint(textureVK.GetType(), format, textureRegion.extent, sizeSubresource));
+    }
 
     /* Create staging buffer */
     VkBufferCreateInfo stagingCreateInfo;
-    BuildVkBufferCreateInfo(stagingCreateInfo, imageDataSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+    BuildVkBufferCreateInfo(stagingCreateInfo, stagingBufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
     VKDeviceBuffer stagingBuffer = CreateStagingBuffer(stagingCreateInfo);
 
     /* Copy staging buffer into hardware texture, then transfer image into sampling-ready state */
@@ -608,7 +658,9 @@ void VKRenderSystem::ReadTexture(Texture& texture, const TextureRegion& textureR
             textureVK.GetVkFormat(),
             VkOffset3D{ textureRegion.offset.x, textureRegion.offset.y, textureRegion.offset.z },
             VkExtent3D{ textureRegion.extent.width, textureRegion.extent.height, textureRegion.extent.depth },
-            subresource
+            subresource,
+            depthBufferOffset,
+            stencilBufferOffset
         );
 
         textureVK.TransitionImageLayout(context_, oldLayout, subresource, true);
@@ -620,11 +672,24 @@ void VKRenderSystem::ReadTexture(Texture& texture, const TextureRegion& textureR
     {
         /* Map buffer memory to host memory */
         VKDeviceMemory* deviceMemory = region->GetParentChunk();
-        if (void* memory = deviceMemory->Map(device_, region->GetOffset(), imageDataSize))
+        if (void* memory = deviceMemory->Map(device_, region->GetOffset(), stagingBufferSize))
         {
             /* Copy data to buffer object */
-            const ImageView srcImageView{ formatAttribs.format, formatAttribs.dataType, memory, static_cast<std::size_t>(imageDataSize) };
-            ConvertImageBuffer(srcImageView, dstImageView, extent, LLGL_MAX_THREAD_COUNT, true);
+            if (IsDepthAndStencilFormat(format))
+            {
+                const std::uint8_t* memoryDepthStart = reinterpret_cast<const std::uint8_t*>(memory) + depthBufferOffset;
+                const ImageView srcImageViewDepth{ formatAttribs.format, formatAttribs.dataType, memoryDepthStart, static_cast<std::size_t>(depthBufferSize) };
+                ConvertImageBuffer(srcImageViewDepth, dstImageView, extent, /*LLGL_MAX_THREAD_COUNT*/0, true, ~0u, 0u);
+
+                const std::uint8_t* memoryStencilStart = reinterpret_cast<const std::uint8_t*>(memory) + stencilBufferOffset;
+                const ImageView srcImageViewStencil{ ImageFormat::Stencil, DataType::UInt8, memoryStencilStart, static_cast<std::size_t>(stencilBufferSize) };
+                ConvertImageBuffer(srcImageViewStencil, dstImageView, extent, /*LLGL_MAX_THREAD_COUNT*/0, true, 0u, ~0u);
+            }
+            else
+            {
+                const ImageView srcImageView{ formatAttribs.format, formatAttribs.dataType, memory, static_cast<std::size_t>(stagingBufferSize) };
+                ConvertImageBuffer(srcImageView, dstImageView, extent, LLGL_MAX_THREAD_COUNT, true);
+            }
             deviceMemory->Unmap(device_);
         }
     }
@@ -642,22 +707,22 @@ Sampler* VKRenderSystem::CreateSampler(const SamplerDescriptor& samplerDesc)
 
 void VKRenderSystem::Release(Sampler& sampler)
 {
-    samplers_.erase(&sampler);
+    SyncGPUAndReleaseResource(samplers_, sampler);
 }
 
 /* ----- Resource Heaps ----- */
 
-ResourceHeap* VKRenderSystem::CreateResourceHeap(const ResourceHeapDescriptor& resourceHeapDesc, const ArrayView<ResourceViewDescriptor>& initialResourceViews)
+ResourceHeap* VKRenderSystem::CreateResourceHeap(const ResourceHeapDescriptor& resourceHeapDesc, ArrayView<ResourceViewDescriptor> initialResourceViews)
 {
     return resourceHeaps_.emplace<VKResourceHeap>(device_, resourceHeapDesc, initialResourceViews);
 }
 
 void VKRenderSystem::Release(ResourceHeap& resourceHeap)
 {
-    resourceHeaps_.erase(&resourceHeap);
+    SyncGPUAndReleaseResource(resourceHeaps_, resourceHeap);
 }
 
-std::uint32_t VKRenderSystem::WriteResourceHeap(ResourceHeap& resourceHeap, std::uint32_t firstDescriptor, const ArrayView<ResourceViewDescriptor>& resourceViews)
+std::uint32_t VKRenderSystem::WriteResourceHeap(ResourceHeap& resourceHeap, std::uint32_t firstDescriptor, ArrayView<ResourceViewDescriptor> resourceViews)
 {
     auto& resourceHeapVK = LLGL_CAST(VKResourceHeap&, resourceHeap);
     return resourceHeapVK.WriteResourceViews(device_, firstDescriptor, resourceViews);
@@ -672,7 +737,7 @@ RenderPass* VKRenderSystem::CreateRenderPass(const RenderPassDescriptor& renderP
 
 void VKRenderSystem::Release(RenderPass& renderPass)
 {
-    renderPasses_.erase(&renderPass);
+    SyncGPUAndReleaseResource(renderPasses_, renderPass);
 }
 
 /* ----- Render Targets ----- */
@@ -684,7 +749,7 @@ RenderTarget* VKRenderSystem::CreateRenderTarget(const RenderTargetDescriptor& r
 
 void VKRenderSystem::Release(RenderTarget& renderTarget)
 {
-    renderTargets_.erase(&renderTarget);
+    SyncGPUAndReleaseResource(renderTargets_, renderTarget);
 }
 
 /* ----- Shader ----- */
@@ -697,7 +762,7 @@ Shader* VKRenderSystem::CreateShader(const ShaderDescriptor& shaderDesc)
 
 void VKRenderSystem::Release(Shader& shader)
 {
-    shaders_.erase(&shader);
+    SyncGPUAndReleaseResource(shaders_, shader);
 }
 
 /* ----- Pipeline Layouts ----- */
@@ -709,7 +774,7 @@ PipelineLayout* VKRenderSystem::CreatePipelineLayout(const PipelineLayoutDescrip
 
 void VKRenderSystem::Release(PipelineLayout& pipelineLayout)
 {
-    pipelineLayouts_.erase(&pipelineLayout);
+    SyncGPUAndReleaseResource(pipelineLayouts_, pipelineLayout);
 }
 
 /* ----- Pipeline Caches ----- */
@@ -721,7 +786,7 @@ PipelineCache* VKRenderSystem::CreatePipelineCache(const Blob& initialBlob)
 
 void VKRenderSystem::Release(PipelineCache& pipelineCache)
 {
-    pipelineCaches_.erase(&pipelineCache);
+    SyncGPUAndReleaseResource(pipelineCaches_, pipelineCache);
 }
 
 /* ----- Pipeline States ----- */
@@ -742,9 +807,24 @@ PipelineState* VKRenderSystem::CreatePipelineState(const ComputePipelineDescript
     return pipelineStates_.emplace<VKComputePSO>(device_, pipelineStateDesc, pipelineCache);
 }
 
-PipelineState* VKRenderSystem::CreatePipelineState(const MeshPipelineDescriptor& /*pipelineStateDesc*/, PipelineCache* /*pipelineCache*/)
+PipelineState* VKRenderSystem::CreatePipelineState(const MeshPipelineDescriptor& pipelineStateDesc, PipelineCache* pipelineCache)
 {
-    return nullptr; // TODO
+    #if VK_EXT_mesh_shader
+    if (HasExtension(VKExt::EXT_mesh_shader))
+    {
+        return pipelineStates_.emplace<VKGraphicsPSO>(
+            device_,
+            (!swapChains_.empty() ? (*swapChains_.begin())->GetRenderPass() : nullptr),
+            pipelineStateDesc,
+            graphicsPipelineLimits_,
+            pipelineCache
+        );
+    }
+    else
+    #endif // /VK_EXT_mesh_shader
+    {
+        return nullptr; // VK_EXT_mesh_shader not supported
+    }
 }
 
 void VKRenderSystem::Release(PipelineState& pipelineState)
@@ -789,7 +869,7 @@ bool VKRenderSystem::GetNativeHandle(void* nativeHandle, std::size_t nativeHandl
         nativeHandleVK->instance        = instance_.Get();
         nativeHandleVK->physicalDevice  = physicalDevice_.GetVkPhysicalDevice();
         nativeHandleVK->device          = device_.GetVkDevice();
-        nativeHandleVK->queue           = device_.GetVkQueue();
+        nativeHandleVK->queue           = device_.GetGraphicsQueue()->native;
         nativeHandleVK->queueFamily     = device_.GetQueueFamilyIndices().graphicsFamily;
         return true;
     }
@@ -801,31 +881,62 @@ bool VKRenderSystem::GetNativeHandle(void* nativeHandle, std::size_t nativeHandl
  * ======= Private: =======
  */
 
-#ifndef VK_LAYER_KHRONOS_VALIDATION_NAME
-#define VK_LAYER_KHRONOS_VALIDATION_NAME "VK_LAYER_KHRONOS_validation"
-#endif
-
 void VKRenderSystem::QuerySupportedInstanceExtensions()
 {
     /* Query instance extension properties */
     instanceExtensionProperties_ = VKQueryInstanceExtensionProperties();
 
-    auto IsVKExtSupportIncluded = [this](VKExtSupport extSupport)
-    {
-        return
-        (
-            extSupport == VKExtSupport::Required ||
-            extSupport == VKExtSupport::Optional ||
-            (this->isDebugLayerEnabled_ && extSupport == VKExtSupport::DebugOnly)
-        );
-    };
-
     for (const VkExtensionProperties& prop : instanceExtensionProperties_)
     {
-        const VKExtSupport extSupport = GetVulkanInstanceExtensionSupport(prop.extensionName);
-        if (IsVKExtSupportIncluded(extSupport))
+        if (VKIsInstanceExtensionEnabled(prop.extensionName, isDebugLayerEnabled_))
             supportedInstanceExtensions_.push_back(prop.extensionName);
     }
+}
+
+bool VKRenderSystem::AppendUserInstanceExtensions(const RendererConfigurationVulkan* config)
+{
+    if (config == nullptr)
+        return true;
+
+    /* Returns the name from the queried properties, so we don't depend on the lifetime of the input strings */
+    auto FindExtension = [this](const char* name) -> const char*
+    {
+        for (const VkExtensionProperties& prop : instanceExtensionProperties_)
+        {
+            if (std::strcmp(prop.extensionName, name) == 0)
+                return prop.extensionName;
+        }
+        return nullptr;
+    };
+
+    auto AppendExtension = [this](const char* name) -> void
+    {
+        for (const char* extension : supportedInstanceExtensions_)
+        {
+            if (std::strcmp(extension, name) == 0)
+                return;
+        }
+        supportedInstanceExtensions_.push_back(name);
+    };
+
+    for (const char* name : config->requiredInstanceExtensions)
+    {
+        if (const char* extension = FindExtension(name))
+            AppendExtension(extension);
+        else
+        {
+            GetMutableReport().Errorf("required Vulkan instance extension not supported: %s\n", name);
+            return false;
+        }
+    }
+
+    for (const char* name : config->optionalInstanceExtensions)
+    {
+        if (const char* extension = FindExtension(name))
+            AppendExtension(extension);
+    }
+
+    return true;
 }
 
 void VKRenderSystem::CreateInstance(const RendererConfigurationVulkan* config)
@@ -892,6 +1003,7 @@ void VKRenderSystem::CreateInstance(const RendererConfigurationVulkan* config)
 
     #if VK_EXT_validation_features
 
+    #if LLGL_VK_ENABLE_GPU_ASSISTED_VALIDATION
     const VkValidationFeatureEnableEXT validationFeaturesEnabled[] =
     {
         VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_EXT,
@@ -909,6 +1021,7 @@ void VKRenderSystem::CreateInstance(const RendererConfigurationVulkan* config)
         validationFeatures.pEnabledValidationFeatures       = validationFeaturesEnabled;
         instanceInfo.pNext = &validationFeatures;
     }
+    #endif
 
     #endif // /VK_EXT_validation_features
 
@@ -917,77 +1030,164 @@ void VKRenderSystem::CreateInstance(const RendererConfigurationVulkan* config)
     VKThrowIfFailed(result, "failed to create Vulkan instance");
 }
 
-static VKAPI_ATTR VkBool32 VKAPI_CALL VKDebugCallback(
-    VkDebugReportFlagsEXT       flags,
-    VkDebugReportObjectTypeEXT  objectType,
-    std::uint64_t               object,
-    std::size_t                 location,
-    std::int32_t                messageCode,
-    const char*                 layerPrefix,
-    const char*                 message,
-    void*                       userData)
+// Suppresses DebugBreakOnError for validation messages caused by known third-party OpenXR-runtime bugs that
+// the application cannot fix. This handles only errors NOT tied to a command buffer (e.g. object creation);
+// errors recorded into / submitted with a command buffer are attributed precisely by command-buffer ownership
+// in ShouldBreakOnValidationError below, so they don't need per-VUID entries here. The message is still logged
+// through DebugPuts so real problems remain visible. Remove entries once the runtimes ship a fix.
+static bool IsKnownXrRuntimeNonCommandFalsePositive(const char* message)
 {
-    DebugPuts(message);
+    if (message == nullptr)
+        return false;
 
-    if ((flags & VK_DEBUG_REPORT_ERROR_BIT_EXT) != 0)
+    // SteamVR's own vkCreateImage with PREINITIALIZED + external-memory (its compositor scene/eye textures).
+    // This is an object-creation error with no associated command buffer, so ownership can't attribute it.
+    return (std::strstr(message, "VUID-VkImageCreateInfo-pNext-01443") != nullptr);
+}
+
+// Returns true if the named object belongs to the external XR runtime (e.g. SteamVR/OpenVR compositor) that
+// shares LLGL's VkDevice. Used to attribute validation errors whose object list contains only a runtime image
+// (and no command buffer) -- e.g. the runtime's own depth-image barriers with aspectMask=0 / wrong layouts.
+static bool IsKnownExternalRuntimeObjectName(const char* objectName)
+{
+    if (objectName == nullptr)
+        return false;
+    static const char* kNames[] =
+    {
+        "CSxrSwapchainVulkanOpenVR", // SteamVR/OpenVR swap-chain images (shared with LLGL)
+        "BlankEyeBuffer",            // SteamVR fallback texture submitted when the app provides no layer
+        "Scene create Vulkan",       // SteamVR compositor scene/eye textures
+    };
+    for (const char* name : kNames)
+    {
+        if (std::strstr(objectName, name) != nullptr)
+            return true;
+    }
+    return false;
+}
+
+// Decides whether a validation error should trigger the debug break. The OpenXR runtime compositor shares
+// LLGL's VkDevice and records/submits its own command buffers on it, so the validation layer reports the
+// runtime's errors to our callback too. We only break for errors LLGL is responsible for: those tied to a
+// command buffer LLGL allocated. Errors tied only to command buffers we don't own (the runtime's) are skipped;
+// errors not tied to any command buffer (e.g. object creation) break unless they are a known runtime false
+// positive. This relies on the debug-utils object list, which the debug-report callback does not provide.
+static bool ShouldBreakOnValidationError(const VkDebugUtilsMessengerCallbackDataEXT* callbackData)
+{
+    bool hasCommandBuffer = false;
+#if LLGL_BUILD_XR_OPENXR
+    bool anyNamedObject                 = false;
+    bool allNamedObjectsAreRuntimeOwned = true;
+#endif // /LLGL_BUILD_XR_OPENXR
+
+    if (callbackData->pObjects != nullptr)
+    {
+        for (std::uint32_t i = 0; i < callbackData->objectCount; ++i)
+        {
+            const VkDebugUtilsObjectNameInfoEXT& obj = callbackData->pObjects[i];
+            if (obj.objectType == VK_OBJECT_TYPE_COMMAND_BUFFER)
+            {
+                hasCommandBuffer = true;
+                if (VKIsLLGLCommandBuffer(reinterpret_cast<VkCommandBuffer>(obj.objectHandle)))
+                    return true; // LLGL recorded/submitted this command buffer -> our responsibility
+            }
+        #if LLGL_BUILD_XR_OPENXR
+            if (obj.pObjectName != nullptr)
+            {
+                anyNamedObject = true;
+                if (!IsKnownExternalRuntimeObjectName(obj.pObjectName))
+                    allNamedObjectsAreRuntimeOwned = false;
+            }
+        #endif // /LLGL_BUILD_XR_OPENXR
+        }
+    }
+
+    // The error references only command buffers LLGL does not own (e.g. an OpenXR runtime compositor's).
+    if (hasCommandBuffer)
+        return false;
+
+#if LLGL_BUILD_XR_OPENXR
+    // No (LLGL) command buffer in the object list. If every named object belongs to the external XR runtime --
+    // e.g. a standalone barrier on the runtime's own swap-chain/scene image whose validation message omits the
+    // recording command buffer -- the error is the runtime's, not LLGL's.
+    if (anyNamedObject && allNamedObjectsAreRuntimeOwned)
+        return false;
+
+    // Object-creation and other command-less errors the runtime is known to produce (unnamed at the time).
+    if (IsKnownXrRuntimeNonCommandFalsePositive(callbackData->pMessage))
+        return false;
+#endif // /LLGL_BUILD_XR_OPENXR
+
+    return true;
+}
+
+static VKAPI_ATTR VkBool32 VKAPI_CALL VKDebugUtilsCallback(
+    VkDebugUtilsMessageSeverityFlagBitsEXT      messageSeverity,
+    VkDebugUtilsMessageTypeFlagsEXT             messageTypes,
+    const VkDebugUtilsMessengerCallbackDataEXT* callbackData,
+    void*                                       userData)
+{
+    if (callbackData == nullptr || callbackData->pMessage == nullptr)
+        return VK_FALSE;
+
+    DebugPuts(callbackData->pMessage);
+
+    if ((messageSeverity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) != 0)
     {
         VKRenderSystem* renderSystemVK = static_cast<VKRenderSystem*>(userData);
-        if (renderSystemVK->IsBreakOnErrorEnabled())
+        if (renderSystemVK->IsBreakOnErrorEnabled() && ShouldBreakOnValidationError(callbackData))
             DebugBreakOnError();
     }
 
     return VK_FALSE;
 }
 
-static VkResult CreateDebugReportCallbackEXT(
+static VkResult CreateDebugUtilsMessengerEXT(
     VkInstance                                  instance,
-    const VkDebugReportCallbackCreateInfoEXT*   createInfo,
+    const VkDebugUtilsMessengerCreateInfoEXT*   createInfo,
     const VkAllocationCallbacks*                allocator,
-    VkDebugReportCallbackEXT*                   callback)
+    VkDebugUtilsMessengerEXT*                   messenger)
 {
-    auto func = reinterpret_cast<PFN_vkCreateDebugReportCallbackEXT>(vkGetInstanceProcAddr(instance, "vkCreateDebugReportCallbackEXT"));
+    auto func = reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(vkGetInstanceProcAddr(instance, "vkCreateDebugUtilsMessengerEXT"));
     if (func != nullptr)
-        return func(instance, createInfo, allocator, callback);
+        return func(instance, createInfo, allocator, messenger);
     else
         return VK_ERROR_EXTENSION_NOT_PRESENT;
 }
 
-static void DestroyDebugReportCallbackEXT(
+static void DestroyDebugUtilsMessengerEXT(
     VkInstance                      instance,
-    VkDebugReportCallbackEXT        callback,
+    VkDebugUtilsMessengerEXT        messenger,
     const VkAllocationCallbacks*    allocator)
 {
-    auto func = reinterpret_cast<PFN_vkDestroyDebugReportCallbackEXT>(vkGetInstanceProcAddr(instance, "vkDestroyDebugReportCallbackEXT"));
+    auto func = reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(vkGetInstanceProcAddr(instance, "vkDestroyDebugUtilsMessengerEXT"));
     if (func != nullptr)
-        func(instance, callback, allocator);
+        func(instance, messenger, allocator);
 }
 
-void VKRenderSystem::CreateDebugReportCallback()
+void VKRenderSystem::CreateDebugMessenger()
 {
-    /* Initialize flags */
-    VkDebugReportFlagsEXT flags = 0;
+    /*
+    Enable command-buffer tracking so the messenger can attribute validation errors to LLGL by command-buffer
+    ownership (see ShouldBreakOnValidationError). Done before any command buffers are allocated.
+    */
+    VKSetCommandBufferTrackingEnabled(true);
 
-    //flags |= VK_DEBUG_REPORT_INFORMATION_BIT_EXT;
-    flags |= VK_DEBUG_REPORT_WARNING_BIT_EXT;
-    //flags |= VK_DEBUG_REPORT_PERFORMANCE_WARNING_BIT_EXT;
-    flags |= VK_DEBUG_REPORT_ERROR_BIT_EXT;
-    //flags |= VK_DEBUG_REPORT_DEBUG_BIT_EXT;
-
-    /* Create report callback */
-    VkDebugReportCallbackCreateInfoEXT createInfo;
+    /* Create debug-utils messenger (used over debug-report so the callback receives the labeled object list) */
+    VkDebugUtilsMessengerCreateInfoEXT createInfo = {};
     {
-        createInfo.sType        = VK_STRUCTURE_TYPE_DEBUG_REPORT_CALLBACK_CREATE_INFO_EXT;
-        createInfo.pNext        = nullptr;
-        createInfo.flags        = flags;
-        createInfo.pfnCallback  = VKDebugCallback;
-        createInfo.pUserData    = this;
+        createInfo.sType            = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
+        createInfo.messageSeverity  = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+        createInfo.messageType      = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+        createInfo.pfnUserCallback  = VKDebugUtilsCallback;
+        createInfo.pUserData        = this;
     }
-    debugReportCallback_ = VKPtr<VkDebugReportCallbackEXT>{ instance_, DestroyDebugReportCallbackEXT };
-    auto result = CreateDebugReportCallbackEXT(instance_, &createInfo, nullptr, debugReportCallback_.ReleaseAndGetAddressOf());
-    VKThrowIfFailed(result, "failed to create Vulkan debug report callback");
+    debugMessenger_ = VKPtr<VkDebugUtilsMessengerEXT>{ instance_, DestroyDebugUtilsMessengerEXT };
+    auto result = CreateDebugUtilsMessengerEXT(instance_, &createInfo, nullptr, debugMessenger_.ReleaseAndGetAddressOf());
+    VKThrowIfFailed(result, "failed to create Vulkan debug utils messenger");
 }
 
-bool VKRenderSystem::PickPhysicalDevice(long preferredDeviceFlags, VkPhysicalDevice customPhysicalDevice)
+bool VKRenderSystem::PickPhysicalDevice(const RendererConfigurationVulkan* config, long preferredDeviceFlags, VkPhysicalDevice customPhysicalDevice)
 {
     /* Pick physical device with Vulkan support */
     if (customPhysicalDevice != VK_NULL_HANDLE)
@@ -995,9 +1195,20 @@ bool VKRenderSystem::PickPhysicalDevice(long preferredDeviceFlags, VkPhysicalDev
         /* Load weak reference to custom native physical device */
         physicalDevice_.LoadPhysicalDeviceWeakRef(customPhysicalDevice);
     }
-    else if (!physicalDevice_.PickPhysicalDevice(instance_, supportedInstanceExtensions_, preferredDeviceFlags))
+    else if (
+        !physicalDevice_.PickPhysicalDevice(
+            instance_,
+            supportedInstanceExtensions_,
+            preferredDeviceFlags,
+            (config != nullptr ? config->requiredDeviceExtensions : ArrayView<const char*>{}),
+            (config != nullptr ? config->optionalDeviceExtensions : ArrayView<const char*>{})
+        )
+    )
     {
-        GetMutableReport().Errorf("failed to find suitable Vulkan device");
+        if (config != nullptr && !config->requiredDeviceExtensions.empty())
+            GetMutableReport().Errorf("failed to find suitable Vulkan device that supports all required device extensions\n");
+        else
+            GetMutableReport().Errorf("failed to find suitable Vulkan device\n");
         return false;
     }
 
@@ -1013,7 +1224,7 @@ void VKRenderSystem::CreateLogicalDevice(VkDevice customLogicalDevice)
     device_ = physicalDevice_.CreateLogicalDevice(customLogicalDevice);
 
     /* Create command queue interface */
-    commandQueue_ = MakeUnique<VKCommandQueue>(device_, device_.GetVkQueue());
+    commandQueue_ = MakeUnique<VKCommandQueue>(device_, device_.GetGraphicsQueue());
 
     /* Load Vulkan device extensions */
     VKLoadDeviceExtensions(device_, physicalDevice_.GetExtensionNames());
@@ -1030,13 +1241,7 @@ bool VKRenderSystem::IsLayerRequired(const char* name, const RendererConfigurati
         }
     }
 
-    if (isDebugLayerEnabled_)
-    {
-        if (::strcmp(name, VK_LAYER_KHRONOS_VALIDATION_NAME) == 0)
-            return true;
-    }
-
-    return false;
+    return (isDebugLayerEnabled_ && VKIsInstanceDebugLayer(name));
 }
 
 VKDeviceBuffer VKRenderSystem::CreateStagingBuffer(const VkBufferCreateInfo& createInfo)
@@ -1130,6 +1335,18 @@ bool VKRenderSystem::QueryRendererDetails(RendererInfo* outInfo, RenderingCapabi
         physicalDevice_.QueryRenderingCaps(*outCaps);
     }
     return true;
+}
+
+void VKRenderSystem::SyncGPU()
+{
+    commandQueue_->WaitIdle();
+}
+
+template <typename TSub, typename TBase>
+void VKRenderSystem::SyncGPUAndReleaseResource(HWObjectContainer<TSub>& container, TBase& resource)
+{
+    SyncGPU();
+    container.erase(&resource);
 }
 
 

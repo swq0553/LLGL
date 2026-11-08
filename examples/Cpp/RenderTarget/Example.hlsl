@@ -1,5 +1,8 @@
 // HLSL model shader
 
+#ifndef ENABLE_CUSTOM_MULTISAMPLING
+#define ENABLE_CUSTOM_MULTISAMPLING 0
+#endif
 
 // VERTEX SHADER
 
@@ -7,7 +10,8 @@ cbuffer Settings : register(b3)
 {
     float4x4 wvpMatrix;
     float4x4 wMatrix;
-    int useTexture2DMS;
+    float3   lightDir;
+    int      useTexture2DMS;
 };
 
 struct InputVS
@@ -38,15 +42,15 @@ OutputVS VS(InputVS inp)
 
 Texture2D colorMap : register(t2);
 
-#ifdef ENABLE_CUSTOM_MULTISAMPLING
-Texture2DMS<float4, 8> colorMapMS : register(t3);
+#if ENABLE_CUSTOM_MULTISAMPLING
+Texture2DMS<float4, 8> colorMapMS : register(t4);
 #endif
 
 SamplerState samplerState : register(s1);
 
 float4 SampleColorMap(float2 texCoord)
 {
-    #ifdef ENABLE_CUSTOM_MULTISAMPLING
+    #if ENABLE_CUSTOM_MULTISAMPLING
     if (useTexture2DMS)
     {
         // Load texel from multi-sample texture
@@ -69,20 +73,24 @@ float4 SampleColorMap(float2 texCoord)
         return c;
     }
     else
-    #endif
+    #endif // ENABLE_CUSTOM_MULTISAMPLING
     {
         // Sample texel from standard texture
         return colorMap.Sample(samplerState, texCoord);
     }
 }
 
+// The MSAA permutation needs its own entry point, since all Metal shaders of an app are linked into a single library
+#if ENABLE_CUSTOM_MULTISAMPLING
+#define PS PS_MSAA
+#endif
+
 float4 PS(OutputVS inp) : SV_Target
 {
     float4 color = SampleColorMap(inp.texCoord);
 
 	// Apply lambert factor for simple shading
-	const float3 lightVec = float3(0, 0, -1);
-	float NdotL = dot(lightVec, normalize(inp.normal));
+	float NdotL = dot(lightDir, normalize(inp.normal));
 	color.rgb *= lerp(0.2, 1.0, NdotL);
 
     return color;

@@ -39,7 +39,7 @@ static VkBufferUsageFlags GetVkBufferUsageFlags(const BufferDescriptor& desc)
     if ((desc.bindFlags & BindFlags::ConstantBuffer) != 0)
         flags |= VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
 
-    /* Sampeld or storage buffer usage */
+    /* Sampled or storage buffer usage */
     if ((desc.bindFlags & (BindFlags::Sampled | BindFlags::Storage)) != 0)
     {
         if (desc.format != Format::Undefined)
@@ -103,11 +103,19 @@ static VkAccessFlags GetBufferVkAccessFlags(long bindFlags)
     return accessFlags;
 }
 
+LLGL_DEPRECATED_IGNORE_PUSH()
+
 static std::uint32_t GetVKBufferStride(const BufferDescriptor& desc)
 {
     /* Just return first vertex attribute stride, since all attributes must have equal strides within the same buffer */
-    return (desc.vertexAttribs.empty() ? 1 : std::max<std::uint32_t>(1u, desc.vertexAttribs[0].stride));
+    if (!desc.vertexAttribs.empty())
+        return std::max<std::uint32_t>(1u, desc.vertexAttribs[0].stride); //DEPRECATED
+    if (desc.stride > 0)
+        return desc.stride;
+    return 1u;
 }
+
+LLGL_DEPRECATED_IGNORE_POP()
 
 VKBuffer::VKBuffer(VkDevice device, const BufferDescriptor& desc) :
     Buffer            { desc.bindFlags                         },
@@ -145,15 +153,19 @@ void VKBuffer::SetStride(std::uint32_t stride)
 
 void VKBuffer::SetDebugName(const char* name)
 {
-    #if VK_EXT_debug_marker
+    #if VK_EXT_debug_utils
     VKSetDebugName(device_, VK_OBJECT_TYPE_BUFFER, reinterpret_cast<std::uint64_t>(GetVkBuffer()), name);
     #endif
 }
 
 bool VKBuffer::CreateBufferView(VkDevice device, VKPtr<VkBufferView>& outBufferView, VkDeviceSize offset, VkDeviceSize length)
 {
-    /* Create a buffer view if a typed-buffer with valid format is created */
-    if (format_ != VK_FORMAT_UNDEFINED)
+    /* A VkBufferView is only valid for buffers created with UNIFORM_TEXEL or STORAGE_TEXEL usage,
+       which GetVkBufferUsageFlags only sets for Sampled/Storage bind flags. Skip view creation for
+       formatted vertex/index buffers — otherwise Vulkan validation rejects the call. */
+    const long bindFlags = GetBindFlags();
+    const bool hasTexelBufferUsage = ((bindFlags & (BindFlags::Sampled | BindFlags::Storage)) != 0);
+    if (format_ != VK_FORMAT_UNDEFINED && hasTexelBufferUsage)
     {
         VkBufferViewCreateInfo viewCreateInfo = {};
         {
@@ -213,7 +225,7 @@ void* VKBuffer::Map(VKDevice& device, const CPUAccess access, VkDeviceSize offse
 {
     if (VkBuffer stagingBuffer = GetStagingVkBuffer())
     {
-        /* Copy GPU local buffer into staging buffer for read accces */
+        /* Copy GPU local buffer into staging buffer for read access */
         if (HasReadAccess(access))
             device.CopyBuffer(GetVkBuffer(), stagingBuffer, GetSize());
 

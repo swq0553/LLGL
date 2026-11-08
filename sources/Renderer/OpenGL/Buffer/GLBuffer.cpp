@@ -6,10 +6,12 @@
  */
 
 #include "GLBuffer.h"
+#include "../Platform/GLContext.h"
+#include "../Platform/GLDriverBugMitigation.h"
 #include "../Profile/GLProfile.h"
+#include "../GLTypes.h"
 #include "../GLObjectUtils.h"
 #include "../Ext/GLExtensions.h"
-#include "../GLTypes.h"
 #include "../Ext/GLExtensionRegistry.h"
 #include "../../../Core/CoreUtils.h"
 #include <LLGL/Backend/OpenGL/NativeHandle.h>
@@ -21,42 +23,53 @@ namespace LLGL
 
 
 // Finds the primary buffer target used for a buffer with the specified binding flags
-static GLBufferTarget FindPrimaryBufferTarget(long bindFlags)
+static GLBufferTarget FindPrimaryBufferTarget(const BufferDescriptor& bufferDesc)
 {
-    if ((bindFlags & BindFlags::VertexBuffer) != 0)
+    if ((bufferDesc.bindFlags & BindFlags::VertexBuffer) != 0)
         return GLBufferTarget::ArrayBuffer;
-    if ((bindFlags & BindFlags::IndexBuffer) != 0)
+    if ((bufferDesc.bindFlags & BindFlags::IndexBuffer) != 0)
         return GLBufferTarget::ElementArrayBuffer;
-    if ((bindFlags & BindFlags::ConstantBuffer) != 0)
+    if ((bufferDesc.bindFlags & BindFlags::ConstantBuffer) != 0)
         return GLBufferTarget::UniformBuffer;
-    if ((bindFlags & BindFlags::StreamOutputBuffer) != 0)
+    if ((bufferDesc.bindFlags & BindFlags::StreamOutputBuffer) != 0)
         return GLBufferTarget::TransformFeedbackBuffer;
-    if ((bindFlags & (BindFlags::Sampled | BindFlags::Storage)) != 0)
-        return GLBufferTarget::ShaderStorageBuffer;
-    if ((bindFlags & BindFlags::IndirectBuffer) != 0)
+    if ((bufferDesc.bindFlags & BindFlags::IndirectBuffer) != 0)
         return GLBufferTarget::DrawIndirectBuffer;
+    if ((bufferDesc.bindFlags & (BindFlags::Sampled | BindFlags::Storage)) != 0)
+    {
+        if (bufferDesc.format != Format::Undefined)
+            return GLBufferTarget::TextureBuffer;
+        else
+            return GLBufferTarget::ShaderStorageBuffer;
+    }
     return GLBufferTarget::ArrayBuffer;
 }
 
-GLBuffer::GLBuffer(long bindFlags, const char* debugName) :
-    Buffer  { bindFlags                          },
-    target_ { FindPrimaryBufferTarget(bindFlags) }
+//private
+void GLBuffer::CreateNativeGLBuffers(GLsizei count, GLuint* buffers)
 {
     #if LLGL_GLEXT_DIRECT_STATE_ACCESS
     if (HasExtension(GLExt::ARB_direct_state_access))
     {
         /* Creates a new GL buffer object and binds it to an unspecified target */
-        glCreateBuffers(1, &id_);
+        glCreateBuffers(count, buffers);
     }
     else
     #endif
     {
         /* Creates a new GL buffer object (must be bound to a target before it can be used) */
-        glGenBuffers(1, &id_);
+        glGenBuffers(count, buffers);
     }
+}
 
-    if (debugName != nullptr)
-        SetDebugName(debugName);
+GLBuffer::GLBuffer(const BufferDescriptor& bufferDesc) :
+    Buffer  { bufferDesc.bindFlags                },
+    target_ { FindPrimaryBufferTarget(bufferDesc) }
+{
+    GLBuffer::CreateNativeGLBuffers(1, &id_);
+
+    if (bufferDesc.debugName != nullptr)
+        SetDebugName(bufferDesc.debugName);
 }
 
 GLBuffer::~GLBuffer()
@@ -106,7 +119,7 @@ BufferDescriptor GLBuffer::GetDesc() const
     bufferDesc.size         = static_cast<std::uint64_t>(size);
     bufferDesc.bindFlags    = GetBindFlags();
 
-    #ifdef GL_ARB_buffer_storage
+    #if GL_ARB_buffer_storage
     if (HasExtension(GLExt::ARB_buffer_storage))
     {
         /* Convert buffer storage flags */
@@ -138,7 +151,7 @@ void GLBuffer::BufferStorage(GLsizeiptr size, const void* data, GLbitfield flags
     }
     else
     #endif // /LLGL_GLEXT_DIRECT_STATE_ACCESS
-    #ifdef GL_ARB_buffer_storage
+    #if GL_ARB_buffer_storage
     if (HasExtension(GLExt::ARB_buffer_storage))
     {
         /* Bind and allocate buffer with immutable storage (GL 4.4+) */
@@ -154,18 +167,30 @@ void GLBuffer::BufferStorage(GLsizeiptr size, const void* data, GLbitfield flags
     }
 }
 
-void GLBuffer::BufferSubData(GLintptr offset, GLsizeiptr size, const void* data)
+void GLBuffer::BufferSubData(GLintptr offset, GLsizeiptr size, const void* data, bool useHazardTrackingIfAvailable)
 {
-    #if LLGL_GLEXT_DIRECT_STATE_ACCESS
-    if (HasExtension(GLExt::ARB_direct_state_access))
+    #if LLGL_GL_DRIVER_BUG_ANGLE_glBufferSubData
+    /* Hazard tracking cannot be used for index data, since WebGL isolates index buffers and only supports glBufferSubData() */
+    if (useHazardTrackingIfAvailable && GetGLTarget() != GL_ELEMENT_ARRAY_BUFFER)
     {
-        glNamedBufferSubData(GetID(), offset, size, data);
+        /* Update buffer data through staging buffer when hazard tracking is enabled */
+        GLContext* currentGLContext = GLContext::GetCurrent();
+        currentGLContext->GetStagingBufferPool().BufferSubData(currentGLContext->GetStateManager(), *this, offset, size, data);
     }
     else
-    #endif // /LLGL_GLEXT_DIRECT_STATE_ACCESS
+    #endif
     {
-        GLStateManager::Get().BindGLBuffer(*this);
-        glBufferSubData(GetGLTarget(), offset, size, data);
+        #if LLGL_GLEXT_DIRECT_STATE_ACCESS
+        if (HasExtension(GLExt::ARB_direct_state_access))
+        {
+            glNamedBufferSubData(GetID(), offset, size, data);
+        }
+        else
+        #endif // /LLGL_GLEXT_DIRECT_STATE_ACCESS
+        {
+            GLStateManager::Get().BindGLBuffer(*this);
+            glBufferSubData(GetGLTarget(), offset, size, data);
+        }
     }
 }
 
@@ -193,7 +218,7 @@ void GLBuffer::ClearBufferData(std::uint32_t data)
     }
     else
     #endif // /LLGL_GLEXT_DIRECT_STATE_ACCESS
-    #ifdef GL_ARB_clear_buffer_object
+    #if GL_ARB_clear_buffer_object
     if (HasExtension(GLExt::ARB_clear_buffer_object))
     {
         GLStateManager::Get().BindGLBuffer(*this);
@@ -214,7 +239,7 @@ void GLBuffer::ClearBufferData(std::uint32_t data)
         /* Allocate intermediate buffer to fill the GPU buffer with */
         std::vector<std::uint32_t> intermediateBuffer(static_cast<std::size_t>(bufferSize + 3) / 4, data);
 
-        /* Submit intermeidate buffer to GPU buffer */
+        /* Submit intermediate buffer to GPU buffer */
         glBufferSubData(bufferTarget, 0, static_cast<GLintptr>(bufferSize), intermediateBuffer.data());
     }
 }
@@ -230,7 +255,7 @@ void GLBuffer::ClearBufferSubData(GLintptr offset, GLsizeiptr size, std::uint32_
     else
     #endif // /LLGL_GLEXT_DIRECT_STATE_ACCESS
     #endif // /TODO
-    #ifdef GL_ARB_clear_buffer_object
+    #if GL_ARB_clear_buffer_object
     if (HasExtension(GLExt::ARB_clear_buffer_object))
     {
         GLStateManager::Get().BindGLBuffer(*this);
@@ -245,7 +270,7 @@ void GLBuffer::ClearBufferSubData(GLintptr offset, GLsizeiptr size, std::uint32_
         /* Allocate intermediate buffer to fill the GPU buffer with */
         std::vector<std::uint32_t> intermediateBuffer(static_cast<std::size_t>(size + 3) / 4, data);
 
-        /* Submit intermeidate buffer to GPU buffer */
+        /* Submit intermediate buffer to GPU buffer */
         glBufferSubData(GetGLTarget(), offset, size, intermediateBuffer.data());
     }
 }
@@ -260,7 +285,7 @@ void GLBuffer::CopyBufferSubData(const GLBuffer& readBuffer, GLintptr readOffset
     }
     else
     #endif // /LLGL_GLEXT_DIRECT_STATE_ACCESS
-    #ifdef GL_ARB_copy_buffer
+    #if GL_ARB_copy_buffer
     if (HasExtension(GLExt::ARB_copy_buffer))
     {
         /* Bind source and destination buffer for copy operation (GL 3.1+) */
@@ -308,7 +333,7 @@ void* GLBuffer::MapBufferRange(GLintptr offset, GLsizeiptr length, GLbitfield ac
     }
     else
     #endif // /LLGL_GLEXT_DIRECT_STATE_ACCESS
-    #ifdef GL_ARB_map_buffer_range
+    #if GL_ARB_map_buffer_range
     if (HasExtension(GLExt::ARB_map_buffer_range))
     {
         GLStateManager::Get().BindGLBuffer(*this);
@@ -370,7 +395,7 @@ void GLBuffer::GetBufferParams(GLint* size, GLint* usage, GLint* storageFlags) c
 
             if (storageFlags != nullptr)
             {
-                #ifdef GL_ARB_buffer_storage
+                #if GL_ARB_buffer_storage
                 if (HasExtension(GLExt::ARB_buffer_storage))
                 {
                     /* Query storage flags (GL_MAP_READ_BIT etc.) */
@@ -405,6 +430,7 @@ void GLBuffer::CreateTexBuffer(GLenum internalFormat)
     #endif
     {
         glGenTextures(1, &texID_);
+        GLStateManager::Get().BindBuffer(GLBufferTarget::TextureBuffer, id_);
         GLStateManager::Get().BindTexture(GLTextureTarget::TextureBuffer, texID_);
         glTexBuffer(GL_TEXTURE_BUFFER, internalFormat, id_);
     }

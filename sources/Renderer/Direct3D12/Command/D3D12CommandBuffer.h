@@ -25,6 +25,8 @@ namespace LLGL
 {
 
 
+struct D3D12SharedDeviceObjects;
+
 class D3D12RenderSystem;
 class D3D12CommandQueue;
 class D3D12SwapChain;
@@ -73,7 +75,7 @@ class D3D12CommandBuffer final : public CommandBufferTier1
             return (isImmediateSubmit_ != 0);
         }
 
-        // Returns ture if this is a bundle command buffer.
+        // Returns true if this is a bundle command buffer.
         inline bool IsBundleCmdBuffer() const
         {
             return (isBundle_ != 0);
@@ -124,13 +126,14 @@ class D3D12CommandBuffer final : public CommandBufferTier1
         void SubmitTransitionResource(D3D12Resource& resource, D3D12_RESOURCE_STATES newState);
         void SubmitTransitionResource(Resource& resource, D3D12_RESOURCE_STATES newState);
 
-        void SetVertexBufferAndTransitionResource(D3D12Buffer& bufferD3D);
+        void SetVertexBufferAndTransitionResource(D3D12Buffer& bufferD3D, const D3D12_VERTEX_BUFFER_VIEW& bufferView);
 
     private:
 
         D3D12CommandContext                     commandContext_;
         D3D12CommandQueue*                      commandQueue_                               = nullptr;
         const D3D12SignatureFactory*            cmdSignatureFactory_                        = nullptr;
+        D3D12SharedDeviceObjects*               sharedDeviceObjects_                        = nullptr;
 
         UINT                                    isImmediateSubmit_  : 1;
         UINT                                    isBundle_           : 1;
@@ -139,6 +142,8 @@ class D3D12CommandBuffer final : public CommandBufferTier1
         UINT                                    rtvDescSize_                                = 0;
         D3D12_CPU_DESCRIPTOR_HANDLE             dsvDescHandle_                              = {};
         UINT                                    dsvDescSize_                                = 0;
+        bool                                    hasDepthAttachment_                         = false;
+        bool                                    hasStencilAttachment_                       = false;
 
         bool                                    scissorEnabled_                             = false;
         UINT                                    numDefaultScissorRects_                     = 0;

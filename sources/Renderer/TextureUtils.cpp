@@ -77,8 +77,11 @@ static void CalcSubresourceLayoutPrimary(
     const FormatAttributes& formatAttribs = GetFormatAttribs(format);
     if (formatAttribs.blockWidth > 0 && formatAttribs.blockHeight > 0)
     {
-        outLayout.rowStride         = (extent.width * formatAttribs.bitSize) / formatAttribs.blockWidth / 8;
-        outLayout.layerStride       = (extent.height * outLayout.rowStride) / formatAttribs.blockHeight;
+        const std::uint32_t bytesPerBlock = formatAttribs.bitSize / 8;
+        const std::uint32_t blocksWide    = DivideRoundUp<std::uint32_t>(extent.width, formatAttribs.blockWidth);
+        const std::uint32_t blocksHigh    = DivideRoundUp<std::uint32_t>(extent.height, formatAttribs.blockHeight);
+        outLayout.rowStride         = blocksWide * bytesPerBlock;
+        outLayout.layerStride       = outLayout.rowStride * blocksHigh;
         outLayout.subresourceSize   = extent.depth * outLayout.layerStride * std::max(1u, numArrayLayers);
     }
 }
@@ -127,6 +130,29 @@ LLGL_EXPORT SubresourceFootprint CalcPackedSubresourceFootprint(
         footprint.size          = (numLayers > 1 ? footprint.layerStride * (numLayers - 1) + footprint.layerSize : footprint.layerSize * numLayers);
     }
     return footprint;
+}
+
+LLGL_EXPORT bool IsAttachmentOnlyTexture(const TextureDescriptor& textureDesc)
+{
+    /* The texture must be bound as exactly one kind of attachment and nothing else */
+    const long relevantBindFlags =
+    (
+        textureDesc.bindFlags &
+        (
+            BindFlags::Sampled                  |
+            BindFlags::Storage                  |
+            BindFlags::ColorAttachment          |
+            BindFlags::DepthStencilAttachment   |
+            BindFlags::CopySrc                  |
+            BindFlags::CopyDst
+        )
+    );
+
+    const bool hasSingleMipLevel        = (textureDesc.mipLevels == 1);
+    const bool hasAttachmentOnlyBinding = (relevantBindFlags == BindFlags::ColorAttachment || relevantBindFlags == BindFlags::DepthStencilAttachment);
+    const bool isNoInitialDataSpecified = ((textureDesc.miscFlags & MiscFlags::NoInitialData) != 0);
+
+    return (hasSingleMipLevel && hasAttachmentOnlyBinding && isNoInitialDataSpecified);
 }
 
 LLGL_EXPORT bool MustGenerateMipsOnCreate(const TextureDescriptor& textureDesc)

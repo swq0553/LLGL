@@ -9,6 +9,7 @@
 #include "../Vulkan.h"
 #include <LLGL/Container/Strings.h>
 #include <LLGL/Platform/Platform.h>
+#include <cstring>
 
 
 namespace LLGL
@@ -40,6 +41,10 @@ static const char* g_VKOptionalExtensions[] =
     #if VK_KHR_imageless_framebuffer
     VK_KHR_IMAGELESS_FRAMEBUFFER_EXTENSION_NAME,
     #endif
+    #if VK_KHR_image_format_list
+    // Required for VK_KHR_imageless_framebuffer
+    VK_KHR_IMAGE_FORMAT_LIST_EXTENSION_NAME,
+    #endif
     #if VK_KHR_portability_enumeration
     VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME,
     #endif
@@ -51,6 +56,46 @@ static const char* g_VKOptionalExtensions[] =
     #endif
     #if VK_EXT_nested_command_buffer
     VK_EXT_NESTED_COMMAND_BUFFER_EXTENSION_NAME,
+    #endif
+    #if VK_EXT_headless_surface
+    VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME,
+    #endif
+    #if VK_KHR_fragment_shading_rate
+    VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME,
+    #endif
+    #if VK_KHR_create_renderpass2
+    // Required by VK_KHR_fragment_shading_rate and VK_KHR_depth_stencil_resolve
+    VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME,
+    #endif
+    #if VK_KHR_depth_stencil_resolve
+    // Resolving a multi-sampled depth attachment; core in Vulkan 1.2, but the OpenXR path
+    // creates a 1.1 device, so it is taken as an extension there.
+    VK_KHR_DEPTH_STENCIL_RESOLVE_EXTENSION_NAME,
+    #endif
+    #if VK_KHR_multiview
+    VK_KHR_MULTIVIEW_EXTENSION_NAME,
+    #endif
+    #if VK_EXT_mesh_shader
+    VK_EXT_MESH_SHADER_EXTENSION_NAME,
+    #endif
+    #if VK_KHR_spirv_1_4
+    // Required for VK_EXT_mesh_shader
+    VK_KHR_SPIRV_1_4_EXTENSION_NAME,
+    #endif
+    #if VK_KHR_shader_float_controls
+    // Required by VK_KHR_spirv_1_4
+    VK_KHR_SHADER_FLOAT_CONTROLS_EXTENSION_NAME,
+    #endif
+    #if VK_GOOGLE_hlsl_functionality1
+    // Adds support for reflection in HLSL shaders cross-compiled to SPIR-V
+    VK_GOOGLE_HLSL_FUNCTIONALITY1_EXTENSION_NAME,
+    #endif
+    #if VK_GOOGLE_user_type
+    VK_GOOGLE_USER_TYPE_EXTENSION_NAME,
+    #endif
+    #if VK_EXT_shader_viewport_index_layer
+    // For enhanced shader control over viewport and layer selection in multiview and array rendering
+    VK_EXT_SHADER_VIEWPORT_INDEX_LAYER_EXTENSION_NAME,
     #endif
     nullptr,
 };
@@ -101,6 +146,9 @@ static bool IsVulkanInstanceExtOptional(const StringView& name)
         #if VK_KHR_portability_enumeration
         || name == VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME
         #endif
+        #if VK_EXT_headless_surface
+        || name == VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME
+        #endif
     );
 }
 
@@ -131,6 +179,35 @@ VKExtSupport GetVulkanInstanceExtensionSupport(const char* extensionName)
     if (IsVulkanInstanceExtDebugOnly(name))
         return VKExtSupport::DebugOnly;
     return VKExtSupport::Unsupported;
+}
+
+bool VKIsInstanceDebugLayer(const char* layerName)
+{
+    return (layerName != nullptr && std::strcmp(layerName, VK_LAYER_KHRONOS_VALIDATION_NAME) == 0);
+}
+
+bool VKIsInstanceExtensionEnabled(const char* extensionName, bool debugLayerEnabled)
+{
+    if (extensionName == nullptr)
+        return false;
+    const VKExtSupport extSupport = GetVulkanInstanceExtensionSupport(extensionName);
+    return
+    (
+        extSupport == VKExtSupport::Required ||
+        extSupport == VKExtSupport::Optional ||
+        (debugLayerEnabled && extSupport == VKExtSupport::DebugOnly)
+    );
+}
+
+const char** VKGetRequiredDeviceExtensions()
+{
+    static const char* required[] =
+    {
+        VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+        VK_KHR_MAINTENANCE1_EXTENSION_NAME,
+        nullptr,
+    };
+    return required;
 }
 
 

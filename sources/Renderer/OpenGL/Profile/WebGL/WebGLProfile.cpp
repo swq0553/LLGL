@@ -26,11 +26,6 @@ int GetRendererID()
     return RendererID::WebGL;
 }
 
-const char* GetModuleName()
-{
-    return "WebGL";
-}
-
 const char* GetRendererName()
 {
     return "WebGL";
@@ -148,7 +143,7 @@ static_assert(LLGL_MAX_NUM_COLOR_ATTACHMENTS <= 16, "WebGL profile can only hand
 
 void DrawBuffer(GLenum buf)
 {
-    if (buf >= GL_COLOR_ATTACHMENT0 && buf <= GL_COLOR_ATTACHMENT0 + LLGL_MAX_NUM_COLOR_ATTACHMENTS)
+    if (buf >= GL_COLOR_ATTACHMENT0 && buf < GL_COLOR_ATTACHMENT0 + LLGL_MAX_NUM_COLOR_ATTACHMENTS)
     {
         /*
         GL_COLOR_ATTACHMENT(i) must only be used at the i-th binding point in GLES/WebGL,
@@ -161,6 +156,17 @@ void DrawBuffer(GLenum buf)
     }
     else
         glDrawBuffers(1, &buf);
+}
+
+void TexParameterSwizzleRGBA(GLenum target, const GLint params[4])
+{
+    LLGL_ASSERT(
+        params[0] == GL_RED   &&
+        params[1] == GL_GREEN &&
+        params[2] == GL_BLUE  &&
+        params[3] == GL_ALPHA,
+        "texture component swizzling not supported in WebGL; components must have identity of RGBA"
+    );
 }
 
 void FramebufferTexture1D(GLenum /*target*/, GLenum /*attachment*/, GLenum /*textarget*/, GLuint /*texture*/, GLint /*level*/)

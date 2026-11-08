@@ -10,10 +10,12 @@
 
 
 #include <LLGL/CommandQueue.h>
+#include <LLGL/QueryHeapFlags.h>
 #include "../Vulkan.h"
 #include "../VKPtr.h"
 #include "../VKCore.h"
 #include "../RenderState/VKFence.h"
+#include <memory>
 
 
 namespace LLGL
@@ -22,8 +24,23 @@ namespace LLGL
 
 class VKQueryHeap;
 
-// Helper function to submit the specified Vulkan command buffer to a command queue.
-VkResult VKSubmitCommandBuffer(VkQueue commandQueue, VkCommandBuffer commandBuffer, VkFence fence);
+struct VKSharedCommandQueue
+{
+    VKSharedCommandQueue() = default;
+
+    inline VKSharedCommandQueue(VkQueue native) :
+        native { native }
+    {
+    }
+
+    VkQueue native = VK_NULL_HANDLE;
+    bool    isIdle = false;
+
+    VkResult WaitIdle();
+    VkResult Submit(const VkSubmitInfo& submitInfo, VkFence fence);
+};
+
+using VKSharedCommandQueueSPtr = std::shared_ptr<VKSharedCommandQueue>;
 
 class VKCommandQueue final : public CommandQueue
 {
@@ -34,7 +51,7 @@ class VKCommandQueue final : public CommandQueue
 
     public:
 
-        VKCommandQueue(VkDevice device, VkQueue queue);
+        VKCommandQueue(VkDevice device, const VKSharedCommandQueueSPtr& sharedCmdQueue);
 
     private:
 
@@ -57,6 +74,7 @@ class VKCommandQueue final : public CommandQueue
         );
 
         VkResult GetQuerySingleResult(
+            QueryType           parentQueryType,
             VKQueryHeap&        queryHeapVK,
             std::uint32_t       query,
             void*               data,
@@ -66,8 +84,8 @@ class VKCommandQueue final : public CommandQueue
 
     private:
 
-        VkDevice    device_ = VK_NULL_HANDLE;
-        VkQueue     native_ = VK_NULL_HANDLE;
+        VkDevice                    device_         = VK_NULL_HANDLE;
+        VKSharedCommandQueueSPtr    sharedCmdQueue_;
 
 };
 

@@ -44,12 +44,6 @@ static std::vector<GLDepthStencilPair> GenImageDataD32fS8ui(std::uint32_t numPix
     return std::vector<std::uint8_t>(static_cast<std::size_t>(numPixels), stencil);
 }*/
 
-// Returns true if the specified hardware format requires an integer type, e.g. GL_RGBA_INTEGER
-static bool IsStrictFloatFormat(const Format format)
-{
-    return (IsFloatFormat(format) && !IsNormalizedFormat(format));
-}
-
 // Returns true if the 'clearValue' member is enabled if no initial image data is specified, i.e. MiscFlags::NoInitialData is NOT specified
 static bool IsClearValueEnabled(const TextureDescriptor& desc)
 {
@@ -59,16 +53,74 @@ static bool IsClearValueEnabled(const TextureDescriptor& desc)
 // Returns true if a GL texture with the specified descriptor can be default initialized with an RGBA float format, i.e. GL_RGBA and GL_FLOAT.
 static bool CanInitializeTexWithRGBAf(const TextureDescriptor& desc)
 {
-    return (IsClearValueEnabled(desc) && !IsCompressedFormat(desc.format) && IsStrictFloatFormat(desc.format));
+    return (IsClearValueEnabled(desc) && !IsCompressedFormat(desc.format) && IsFloatFormat(desc.format));
 }
 
 static GLenum GetDefaultInitialGLImageFormat(Format format)
 {
+    // OpenGL (especially WebGL) is very pedantic about the image data even when it's mean to default initialize the texture.
+    // So match the image component layout with the input format.
+    const FormatAttributes& formatAttribs = GetFormatAttribs(format);
     #if !LLGL_GL_ENABLE_OPENGL2X
-    return (IsIntegerFormat(format) ? GL_RGBA_INTEGER : GL_RGBA);
-    #else
-    return GL_RGBA;
+    if (IsIntegerFormat(format))
+    {
+        switch (formatAttribs.format)
+        {
+            #if GL_ALPHA_INTEGER
+            case ImageFormat::Alpha:        return GL_ALPHA_INTEGER;
+            #else
+            case ImageFormat::Alpha:        return GL_RED_INTEGER; // Emulate Alpha with component swizzling
+            #endif
+            case ImageFormat::R:            return GL_RED_INTEGER;
+            case ImageFormat::RG:           return GL_RG_INTEGER;
+            case ImageFormat::RGB:          return GL_RGB_INTEGER;
+            case ImageFormat::RGBA:         return GL_RGBA_INTEGER;
+            #if GL_BGR_INTEGER
+            case ImageFormat::BGR:          return GL_BGR_INTEGER;
+            #else
+            case ImageFormat::BGR:          return GL_RGB_INTEGER; // Emulate BGR with component swizzling
+            #endif
+            #if GL_BGRA_INTEGER
+            case ImageFormat::BGRA:         return GL_BGRA_INTEGER;
+            #else
+            case ImageFormat::BGRA:         return GL_RGBA_INTEGER; // Emulate BGRA with component swizzling
+            #endif
+            default:                        break;
+        }
+        return GL_RGBA_INTEGER;
+    }
+    else
     #endif
+    {
+        switch (formatAttribs.format)
+        {
+            case ImageFormat::Alpha:        return GL_ALPHA;
+            case ImageFormat::R:            return GL_RED;
+            case ImageFormat::RG:           return GL_RG;
+            case ImageFormat::RGB:          return GL_RGB;
+            case ImageFormat::RGBA:         return GL_RGBA;
+            #if GL_BGR
+            case ImageFormat::BGR:          return GL_BGR;
+            #else
+            case ImageFormat::BGR:          return GL_RGB; // Emulate BGR with component swizzling
+            #endif
+            #if GL_BGRA
+            case ImageFormat::BGRA:         return GL_BGRA;
+            #else
+            case ImageFormat::BGRA:         return GL_RGBA; // Emulate BGRA with component swizzling
+            #endif
+            case ImageFormat::Depth:        return GL_DEPTH_COMPONENT;
+            case ImageFormat::DepthStencil: return GL_DEPTH_STENCIL;
+            case ImageFormat::Stencil:      return GL_STENCIL_INDEX;
+            default:                        break;
+        }
+        return GL_RGBA;
+    }
+}
+
+static GLenum GetDefaultInitialGLDataType(Format format)
+{
+    return (IsFloatFormat(format) ? GL_FLOAT : GL_UNSIGNED_BYTE);
 }
 
 [[noreturn]]
@@ -115,7 +167,7 @@ static bool IsSecondaryCubeFaceTarget(GLenum target)
 
 /* ----- Back-end OpenGL functions ----- */
 
-#ifdef LLGL_OPENGL
+#if LLGL_OPENGL
 
 static void GLTexImage1DBase(
     GLenum          target,
@@ -215,7 +267,7 @@ static void GLTexImage2DBase(
         /* Allocate mutable texture storage of MIP levels (emulate <glTexStorage2D>) */
         if (mipLevels > 1)
         {
-            #ifdef LLGL_OPENGL
+            #if LLGL_OPENGL
             if (target == GL_TEXTURE_1D_ARRAY || target == GL_PROXY_TEXTURE_1D_ARRAY)
             {
                 for_subrange(mipLevel, 1, mipLevels)
@@ -330,10 +382,14 @@ static void GLTexImage2DMultisampleBase(
     }
     else
     #endif
+    #if LLGL_OPENGL
     {
         /* Allocate mutable texture storage */
         glTexImage2DMultisample(target, sampleCount, internalFormat, sx, sy, fixedSampleLocations);
     }
+    #else
+    LLGL_TRAP_FEATURE_NOT_SUPPORTED("GL_ARB_texture_storage_multisample");
+    #endif
 }
 
 static void GLTexImage3DMultisampleBase(
@@ -360,17 +416,21 @@ static void GLTexImage3DMultisampleBase(
     }
     else
     #endif
+    #if LLGL_OPENGL
     {
         /* Allocate mutable texture storage */
         glTexImage3DMultisample(target, sampleCount, internalFormat, sx, sy, sz, fixedSampleLocations);
     }
+    #else
+    LLGL_TRAP_FEATURE_NOT_SUPPORTED("GL_ARB_texture_storage_multisample");
+    #endif
 }
 
 #endif // /LLGL_GLEXT_TEXTURE_MULTISAMPLE
 
 /* ----- Wrapper functions ----- */
 
-#ifdef LLGL_OPENGL
+#if LLGL_OPENGL
 
 static void GLTexImage1D(
     std::uint32_t   mipLevels,
@@ -427,7 +487,7 @@ static void GLTexImageCube(
     GLTexImage2DBase(GLTypes::ToTextureCubeMap(cubeFaceIndex), mipLevels, internalFormat, width, height, format, type, data, compressedSize);
 }
 
-#ifdef LLGL_OPENGL
+#if LLGL_OPENGL
 
 static void GLTexImage1DArray(
     std::uint32_t   mipLevels,
@@ -497,7 +557,7 @@ static void GLTexImage2DMultisampleArray(
 
 #endif // /LLGL_GLEXT_TEXTURE_MULTISAMPLE
 
-#ifdef LLGL_OPENGL
+#if LLGL_OPENGL
 
 static void GLTexImage1D(const TextureDescriptor& desc, const ImageView* imageView)
 {
@@ -540,7 +600,7 @@ static void GLTexImage1D(const TextureDescriptor& desc, const ImageView* imageVi
             desc.format,
             desc.extent.width,
             GetDefaultInitialGLImageFormat(desc.format),
-            GL_UNSIGNED_BYTE,
+            GetDefaultInitialGLDataType(desc.format),
             nullptr
         );
     }
@@ -651,7 +711,7 @@ static void GLTexImage2D(const TextureDescriptor& desc, const ImageView* imageVi
             desc.extent.width,
             desc.extent.height,
             GetDefaultInitialGLImageFormat(desc.format),
-            GL_UNSIGNED_BYTE,
+            GetDefaultInitialGLDataType(desc.format),
             nullptr
         );
     }
@@ -704,7 +764,7 @@ static void GLTexImage3D(const TextureDescriptor& desc, const ImageView* imageVi
             desc.extent.height,
             desc.extent.depth,
             GetDefaultInitialGLImageFormat(desc.format),
-            GL_UNSIGNED_BYTE,
+            GetDefaultInitialGLDataType(desc.format),
             nullptr
         );
     }
@@ -834,14 +894,14 @@ static void GLTexImageCube(const TextureDescriptor& desc, const ImageView* image
                 desc.extent.height,
                 arrayLayer,
                 GetDefaultInitialGLImageFormat(desc.format),
-                GL_UNSIGNED_BYTE,
+                GetDefaultInitialGLDataType(desc.format),
                 nullptr
             );
         }
     }
 }
 
-#ifdef LLGL_OPENGL
+#if LLGL_OPENGL
 
 static void GLTexImage1DArray(const TextureDescriptor& desc, const ImageView* imageView)
 {
@@ -887,7 +947,7 @@ static void GLTexImage1DArray(const TextureDescriptor& desc, const ImageView* im
             desc.extent.width,
             desc.arrayLayers,
             GetDefaultInitialGLImageFormat(desc.format),
-            GL_UNSIGNED_BYTE,
+            GetDefaultInitialGLDataType(desc.format),
             nullptr
         );
     }
@@ -1005,7 +1065,7 @@ static void GLTexImage2DArray(const TextureDescriptor& desc, const ImageView* im
             desc.extent.height,
             desc.arrayLayers,
             GetDefaultInitialGLImageFormat(desc.format),
-            GL_UNSIGNED_BYTE,
+            GetDefaultInitialGLDataType(desc.format),
             nullptr
         );
     }
@@ -1060,7 +1120,7 @@ static void GLTexImageCubeArray(const TextureDescriptor& desc, const ImageView* 
             desc.extent.height,
             desc.arrayLayers,
             GetDefaultInitialGLImageFormat(desc.format),
-            GL_UNSIGNED_BYTE,
+            GetDefaultInitialGLDataType(desc.format),
             nullptr
         );
     }
@@ -1102,7 +1162,7 @@ bool GLTexImage(const TextureDescriptor& desc, const ImageView* imageView)
 
     switch (desc.type)
     {
-        #ifdef LLGL_OPENGL
+        #if LLGL_OPENGL
         case TextureType::Texture1D:
             GLTexImage1D(desc, imageView);
             break;
@@ -1120,7 +1180,7 @@ bool GLTexImage(const TextureDescriptor& desc, const ImageView* imageView)
             GLTexImageCube(desc, imageView);
             break;
 
-        #if LLGL_GLEXT_TEXTURE_MULTISAMPLE
+        #if LLGL_OPENGL && LLGL_GLEXT_TEXTURE_MULTISAMPLE
         case TextureType::Texture1DArray:
             GLTexImage1DArray(desc, imageView);
             break;

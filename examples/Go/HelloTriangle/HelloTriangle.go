@@ -10,11 +10,18 @@ package main
 import (
 	"log"
 	"unsafe"
+	"runtime"
 
 	"../../../wrapper/Go"
 )
 
 func main() {
+
+	// Lock the current goroutine to its current OS thread.
+	// This ensures all CGO calls happen on the same thread,
+	// which is mandatory for the LLGL wrapper.
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 
 	// Load renderer and create swap chain
 	renderer := llgl.LoadRenderSystem("OpenGL")
@@ -35,14 +42,14 @@ func main() {
 	}
 
 	vertices := [3]Vertex{
-		Vertex{ x:  0.0, y: +0.5, color: 0xFF0000FF }, // Red
-		Vertex{ x: +0.5, y: -0.5, color: 0xFF00FF00 }, // Green
-		Vertex{ x: -0.5, y: -0.5, color: 0xFFFF0000 }, // Blue
+		{ x:  0.0, y: +0.5, color: 0xFF0000FF }, // Red
+		{ x: +0.5, y: -0.5, color: 0xFF00FF00 }, // Green
+		{ x: -0.5, y: -0.5, color: 0xFFFF0000 }, // Blue
 	}
 
 	vertexLayout := []llgl.VertexAttribute{
-		llgl.VertexAttribute{ Name: "position", Format: llgl.FormatRG32Float,  Location: 0, Offset: uint32(unsafe.Offsetof(vertices[0].x    )), Stride: uint32(unsafe.Sizeof(vertices[0])) },
-		llgl.VertexAttribute{ Name: "color",    Format: llgl.FormatRGBA8UNorm, Location: 1, Offset: uint32(unsafe.Offsetof(vertices[0].color)), Stride: uint32(unsafe.Sizeof(vertices[0])) },
+		{ Name: "position", Format: llgl.FormatRG32Float,  Location: 0, Offset: uint32(unsafe.Offsetof(vertices[0].x    )), Stride: uint32(unsafe.Sizeof(vertices[0])) },
+		{ Name: "color",    Format: llgl.FormatRGBA8UNorm, Location: 1, Offset: uint32(unsafe.Offsetof(vertices[0].color)), Stride: uint32(unsafe.Sizeof(vertices[0])) },
 	}
 	
 	vertexBuffer := renderer.CreateBuffer(
@@ -107,14 +114,15 @@ func main() {
 	}
 
 	// Main loop
-	for llgl.ProcessSurfaceEvents() {
+	window := llgl.AsWindow(swapChain.GetSurface())
+	for llgl.ProcessSurfaceEvents() && !window.HasQuit() {
 		cmdBuffer.Begin()
 		cmdBuffer.BeginRenderPass(swapChain)
 
 		resolution := swapChain.GetResolution()
-		cmdBuffer.Clear(llgl.ClearColor, llgl.ClearValue{ Color: [4]float32{ 0.1, 0.1, 0.2, 1.0} })
 		cmdBuffer.SetPipelineState(pso)
 		cmdBuffer.SetViewport(llgl.Viewport{ X: 0.0, Y: 0.0, Width: float32(resolution.Width), Height: float32(resolution.Height), MinDepth: 0.0, MaxDepth: 1.0 })
+		cmdBuffer.Clear(llgl.ClearColor, llgl.ClearValue{ Color: [4]float32{ 0.1, 0.1, 0.2, 1.0} })
 
 		cmdBuffer.SetVertexBuffer(vertexBuffer)
 		cmdBuffer.Draw(3, 0)

@@ -12,6 +12,7 @@
 #include <LLGL/Export.h>
 #include <LLGL/Container/ArrayView.h>
 #include <LLGL/Container/AlignedArray.h>
+#include <LLGL/Tags.h>
 #include <memory>
 #include <cstddef>
 #include <iterator>
@@ -105,7 +106,7 @@ struct GrowStrategyRoundUpPow2
 /**
 \brief Generic container class for consecutive arrays optimized for small sizes.
 \tparam T Specifies the array element type.
-\tparam LocalCapacity Specifies the capacity of the local buffer. Up to this number of elemnts no dynamic memory allocation is necessary. By default 16.
+\tparam LocalCapacity Specifies the capacity of the local buffer. Up to this number of elements no dynamic memory allocation is necessary. By default 16.
 \tparam Allocator Specifies the memory allocator. This has to be compatible with std::allocator. By default std::allocator<T>.
 \tparam GrowStrategy Specifies the strategy to grow the internal storage when the container switched to heap allocations. By default GrowStrategyAddHalf.
 */
@@ -169,12 +170,25 @@ class LLGL_EXPORT SmallVector
             operator = (other);
         }
 
-        //! Takes the ownership of dynamically allocated elements from the \c other vector or copies all elements if the dynamic allocation is not used yet.
+        // Ignore warning C26439 - missing noexcept specifier
+        #if _MSC_VER
+        #   pragma warning(push)
+        #   pragma warning(disable : 26439)
+        #endif
+
+        /**
+        \brief Takes the ownership of dynamically allocated elements from the \c other vector or copies all elements if the dynamic allocation is not used yet.
+        \remarks This function is intentionally not marked noexcept because we have to copy the data in case the vector is static.
+        */
         SmallVector(SmallVector&& other) :
             SmallVector {}
         {
             operator = (std::forward<SmallVector&&>(other));
         }
+
+        #if _MSC_VER
+        #   pragma warning(pop)
+        #endif
 
         //! Initializes the vector with the specified elements in the half-open range <code>[from, to)</code>.
         template <typename InputIter>
@@ -198,6 +212,22 @@ class LLGL_EXPORT SmallVector
         {
         }
 
+        //! Initializes the vector with a copy of all elements from the specified array view.
+        SmallVector(ArrayView<T> list) :
+            SmallVector { list.begin(), list.end() }
+        {
+        }
+
+        /**
+        \brief Initializes the vector with a copy of all elements from the specified data with a fixed size array.
+        \remarks The size of this container will be equal to the template parameter \c <N>.
+        */
+        template <std::size_t N>
+        SmallVector(const T (&data)[N]) :
+            SmallVector { std::begin(data), std::end(data) }
+        {
+        }
+
         //! Initializes the vector with the specified number of elements and initial default value.
         explicit SmallVector(size_type count) :
             SmallVector {}
@@ -210,6 +240,13 @@ class LLGL_EXPORT SmallVector
             SmallVector {}
         {
             resize(count, value);
+        }
+
+        //! Pre-allocates the vector with the specified number of elements but keeps them all uninitialized.
+        explicit SmallVector(size_type count, UninitializeTag) :
+            SmallVector {}
+        {
+            resize(count, UninitializeTag{});
         }
 
         //! Destroys all elements in this vector.
@@ -352,6 +389,26 @@ class LLGL_EXPORT SmallVector
         }
 
         /**
+        \brief Resizes this vector to the new size and explicitly keeps all newly elements uninitialized.
+        \param[in] size Specifies the new vector size (in number of elements).
+        \remarks After this call, \c size() returns the same value as the input parameter \c size.
+        \see resize(size_type)
+        */
+        void resize(size_type size, UninitializeTag)
+        {
+            if (size_ < size)
+            {
+                reserve(size);
+                size_ = size;
+            }
+            else if (size_ > size)
+            {
+                destroy_range(begin() + size, end());
+                size_ = size;
+            }
+        }
+
+        /**
         \brief Reserves memory for this vector to hold at least \c size elements.
         \param[in] size Specifies the minimum reserved capacity. The initial capacity is equal to the template argument \c LocalCapacity.
         If the new size is smaller than or equal to the current capacity, this function has no effect.
@@ -471,6 +528,7 @@ class LLGL_EXPORT SmallVector
             return end();
         }
 
+        // This function is intentionally not marked noexcept because we have to copy the data in case the vector is static.
         void swap(SmallVector& other)
         {
             if (is_dynamic() && other.is_dynamic())
@@ -574,8 +632,11 @@ class LLGL_EXPORT SmallVector
 
         SmallVector& operator = (const SmallVector& rhs)
         {
-            clear();
-            insert(end(), rhs.begin(), rhs.end());
+            if (&rhs != this)
+            {
+                clear();
+                insert(end(), rhs.begin(), rhs.end());
+            }
             return *this;
         }
 
@@ -592,13 +653,23 @@ class LLGL_EXPORT SmallVector
             insert(end(), rhs.begin(), rhs.end());
             return *this;
         }
+        
+        // Ignore warning C26439 - missing noexcept specifier
+        #if _MSC_VER
+        #   pragma warning(push)
+        #   pragma warning(disable : 26439)
+        #endif
 
+        /**
+        \brief Takes the ownership of dynamically allocated elements from the \c rhs vector or copies all elements if the dynamic allocation is not used yet.
+        \remarks This function is intentionally not marked noexcept because we have to copy the data in case the vector is static.
+        */
         SmallVector& operator = (SmallVector&& rhs)
         {
             if (&rhs != this)
             {
                 /* Clear this container and adopt new configuration */
-                release_heap();
+                release();
 
                 if (rhs.is_dynamic())
                 {
@@ -623,6 +694,10 @@ class LLGL_EXPORT SmallVector
             }
             return *this;
         }
+        
+        #if _MSC_VER
+        #   pragma warning(pop)
+        #endif
 
         const_reference operator [] (size_type pos) const
         {
@@ -746,10 +821,9 @@ class LLGL_EXPORT SmallVector
 
         void move_all(pointer dst)
         {
-            /* Copy elements into new container, destroy old elements, and deallocate old container */
+            /* Copy elements into new container and release old data */
             construct_range(dst, begin(), end());
-            destroy_range(begin(), end());
-            release_heap();
+            release();
         }
 
         void move_tail_left(iterator dst, iterator from, iterator to)
@@ -799,12 +873,11 @@ class LLGL_EXPORT SmallVector
             const size_type cap = GrowStrategy::Grow(size() + count);
             pointer data = Allocator{}.allocate(cap);
 
-            /* Copy elements into new container, destroy old elements, and deallocate old container */
+            /* Copy elements into new container and release old data */
             construct_range(data, begin(), begin() + offset);
             construct_range(data + offset, src, src + count);
             construct_range(data + offset + count, begin() + offset, end());
-            destroy_range(begin(), end());
-            release_heap();
+            release();
 
             /* Take new container */
             data_   = data;

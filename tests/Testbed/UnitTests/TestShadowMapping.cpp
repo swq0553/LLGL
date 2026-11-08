@@ -104,6 +104,7 @@ DEF_TEST( ShadowMapping )
         {
             psoDesc.pipelineLayout      = psoLayout;
             psoDesc.renderPass          = loadContentRenderPass;
+            psoDesc.inputVertexAttribs  = vertexFormats[VertFmtStd].attributes;
             psoDesc.vertexShader        = shaders[VSShadowedScene];
             psoDesc.fragmentShader      = shaders[PSShadowedScene];
             psoDesc.depth.testEnabled   = true;
@@ -171,6 +172,7 @@ DEF_TEST( ShadowMapping )
         {
             psoDesc.pipelineLayout                      = layouts[PipelineSolid];
             psoDesc.renderPass                          = resources.target->GetRenderPass();
+            psoDesc.inputVertexAttribs                  = vertexFormats[VertFmtStd].attributes;
             psoDesc.vertexShader                        = shaders[VSShadowMap];
             psoDesc.viewports                           = { Viewport{ resolution } };
             psoDesc.depth.testEnabled                   = true;
@@ -297,7 +299,7 @@ DEF_TEST( ShadowMapping )
         ViewportConfig{ Viewport{ Offset2D{        0, halfResY }, halfRes }, 80.0f, ColorRGBf{ 0.6f, 0.6f, 0.8f } },
     };
 
-    cmdBuffer->Begin();
+    BEGIN();
     {
         // Graphics can be set inside and outside a render pass, so test binding this PSO outside the render pass
         cmdBuffer->SetVertexBuffer(*meshBuffer);
@@ -349,7 +351,7 @@ DEF_TEST( ShadowMapping )
         }
         cmdBuffer->EndRenderPass();
     }
-    cmdBuffer->End();
+    END();
 
     cmdQueue->WaitIdle();
 

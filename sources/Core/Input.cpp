@@ -10,11 +10,14 @@
 #include <LLGL/Window.h>
 #include <LLGL/Canvas.h>
 #include <LLGL/Container/Strings.h>
+#include <LLGL/Constants.h>
+#include <LLGL/Utils/ForRange.h>
 #include <string.h>
 #include <vector>
 #include <algorithm>
 #include <memory>
 #include <math.h>
+#include "../Platform/PlatformUtils.h"
 
 
 namespace LLGL
@@ -82,7 +85,7 @@ struct EventListenerSurfacePair
 };
 
 // Returns the input value with zeroing out the integral part.
-static float ZeroIntegralPart(float val)
+static float GetFractionalPart(float val)
 {
     return (val < 0.0f ? val + ::floorf(-val) : val - ::floorf(val));
 }
@@ -99,13 +102,14 @@ struct Input::Pimpl
     KeyTracker      keyDownRepeatedTracker;
     KeyTracker      keyUpTracker;
 
-    Offset2D        mousePosition;
-    float           motionVector[2]         = { 0.0f, 0.0f };
-    Surface*        firstMotionResponder    = nullptr;
+    InputPointer    inputPointers[LLGL_MAX_NUM_INPUT_POINTERS];
+    unsigned        numInputPointers        = 0;
 
-    int             wheelMotion             = 0;
+    float           wheelMotion[2]          = { 0.0f, 0.0f };
     unsigned        anyKeyCount             = 0;
     UTF8String      chars;
+
+    InputHandling   inputHandling           = InputHandling::ProcessAndConsume;
 
     std::vector<EventListenerSurfacePair<WindowEventListener>>
                     windowEventListeners;
@@ -116,10 +120,20 @@ struct Input::Pimpl
     void Reset()
     {
         /* Reset all input states to make room for next recordings */
-        wheelMotion = 0;
-        motionVector[0] = ZeroIntegralPart(motionVector[0]);
-        motionVector[1] = ZeroIntegralPart(motionVector[1]);
-        firstMotionResponder = nullptr;
+        wheelMotion[0] = GetFractionalPart(wheelMotion[0]);
+        wheelMotion[1] = GetFractionalPart(wheelMotion[1]);
+
+        for_range(i, numInputPointers)
+        {
+            inputPointers[i].dX = GetFractionalPart(inputPointers[i].dX);
+            inputPointers[i].dY = GetFractionalPart(inputPointers[i].dY);
+
+            if (inputPointers[i].state == InputState::Activate)
+                inputPointers[i].state = InputState::Active;
+            else if (inputPointers[i].state == InputState::Deactivate)
+                inputPointers[i].state = InputState::Inactive;
+        }
+        numInputPointers = 0;
 
         keyDownTracker.Reset(keyDown);
         keyDownRepeatedTracker.Reset(keyDownRepeated);
@@ -128,6 +142,10 @@ struct Input::Pimpl
         ResetDoubleClickArray(doubleClick);
 
         chars.clear();
+
+        /* Always mark the first input pointer as active for desktop platforms */
+        if (!IsRunningOnMobileDevice())
+            inputPointers[0].state = InputState::Active;
     }
 
     void OnKeyDown(Key keyCode)
@@ -182,14 +200,34 @@ struct Input::Pimpl
         keyPressed[idx] = false;
     }
 
-    void OnMotion(Surface* sender, float dx, float dy)
+    void SetPointerPosition(unsigned pointerIndex, Offset2D position)
     {
-        if (firstMotionResponder == nullptr || firstMotionResponder == sender)
+        if (pointerIndex < LLGL_MAX_NUM_INPUT_POINTERS)
         {
-            motionVector[0] += dx;
-            motionVector[1] += dy;
-            firstMotionResponder = sender;
+            inputPointers[pointerIndex].position = position;
+            RegisterTouchInput(pointerIndex);
         }
+    }
+
+    void SetPointerMotionVector(unsigned pointerIndex, float dX, float dY)
+    {
+        if (pointerIndex < LLGL_MAX_NUM_INPUT_POINTERS)
+        {
+            inputPointers[pointerIndex].dX += dX;
+            inputPointers[pointerIndex].dY += dY;
+            RegisterTouchInput(pointerIndex);
+        }
+    }
+
+    void SetTouch(unsigned pointerIndex, InputState state)
+    {
+        inputPointers[pointerIndex].state = state;
+        RegisterTouchInput(pointerIndex);
+    }
+
+    void RegisterTouchInput(unsigned pointerIndex)
+    {
+        numInputPointers = std::max<unsigned>(numInputPointers, pointerIndex + 1);
     }
 };
 
@@ -245,17 +283,18 @@ class Input::WindowEventListener final : public Window::EventListener
 
         void OnWheelMotion(Window& /*sender*/, int motion) override
         {
-            data_.wheelMotion += motion;
+            data_.wheelMotion[0] += static_cast<float>(motion);
+            data_.wheelMotion[1] += static_cast<float>(motion);
         }
 
         void OnLocalMotion(Window& /*sender*/, const Offset2D& position) override
         {
-            data_.mousePosition = position;
+            data_.SetPointerPosition(0, position);
         }
 
-        void OnGlobalMotion(Window& sender, const Offset2D& motion) override
+        void OnGlobalMotion(Window& /*sender*/, const Offset2D& motion) override
         {
-            data_.OnMotion(&sender, static_cast<float>(motion.x), static_cast<float>(motion.y));
+            data_.SetPointerMotionVector(0, static_cast<float>(motion.x), static_cast<float>(motion.y));
         }
 
         void OnLostFocus(Window& /*sender*/) override
@@ -287,27 +326,42 @@ class Input::CanvasEventListener final : public Canvas::EventListener
 
     private:
 
-        void OnTapGesture(Canvas& /*sender*/, const Offset2D& position, std::uint32_t /*numTouches*/) override
+        #define EXIT_IF_IGNORED() \
+            if (data_.inputHandling == InputHandling::Ignore) return
+
+        bool IsConsumeEventsEnabled() const override
         {
-            data_.mousePosition = position;
+            return (data_.inputHandling == InputHandling::ProcessAndConsume);
         }
 
-        void OnPanGesture(Canvas& sender, const Offset2D& position, std::uint32_t numTouches, float dx, float dy, EventAction action) override
+        void OnTapGesture(Canvas& /*sender*/, Offset2D position, std::uint32_t touchIndex, std::uint32_t /*numTouches*/) override
         {
-            const bool interpretAsLButton = (numTouches == 1);
-            data_.mousePosition = position;
+            EXIT_IF_IGNORED();
+            data_.SetPointerPosition(touchIndex, position);
+        }
+
+        void OnPanGesture(Canvas& /*sender*/, Offset2D position, std::uint32_t touchIndex, std::uint32_t /*numTouches*/, float dX, float dY, EventAction action) override
+        {
+            EXIT_IF_IGNORED();
+
+            data_.SetPointerPosition(touchIndex, position);
+
+            const bool interpretAsLButton = (touchIndex == 0);
             const Key keyCode = (interpretAsLButton ? Key::LButton : Key::RButton);
+
             switch (action)
             {
                 case EventAction::Began:
                     data_.OnKeyDown(keyCode);
+                    data_.SetTouch(touchIndex, InputState::Activate);
                     break;
 
                 case EventAction::Changed:
-                    data_.OnMotion(&sender, dx, dy);
+                    data_.SetPointerMotionVector(touchIndex, dX, dY);
                     break;
 
                 case EventAction::Ended:
+                    data_.SetTouch(touchIndex, InputState::Deactivate);
                     data_.OnKeyUp(keyCode);
                     break;
             }
@@ -315,13 +369,50 @@ class Input::CanvasEventListener final : public Canvas::EventListener
 
         void OnKeyDown(Canvas& /*sender*/, Key keyCode) override
         {
+            EXIT_IF_IGNORED();
             data_.OnKeyDown(keyCode);
         }
 
         void OnKeyUp(Canvas& /*sender*/, Key keyCode) override
         {
+            EXIT_IF_IGNORED();
             data_.OnKeyUp(keyCode);
         }
+
+        void OnDoubleClick(Canvas& /*sender*/, Key keyCode) override
+        {
+            EXIT_IF_IGNORED();
+            switch (keyCode)
+            {
+                case Key::LButton:
+                    data_.doubleClick[0] = true;
+                    break;
+                case Key::RButton:
+                    data_.doubleClick[1] = true;
+                    break;
+                case Key::MButton:
+                    data_.doubleClick[2] = true;
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        void OnWheelMotion(Canvas& /*sender*/, float dX, float dY) override
+        {
+            EXIT_IF_IGNORED();
+            data_.wheelMotion[0] += dX;
+            data_.wheelMotion[1] += dY;
+        }
+
+        void OnMouseMotion(Canvas& /*sender*/, Offset2D position, float dX, float dY) override
+        {
+            EXIT_IF_IGNORED();
+            data_.SetPointerPosition(0, position);
+            data_.SetPointerMotionVector(0, dX, dY);
+        }
+
+        #undef EXIT_IF_IGNORED
 
     private:
 
@@ -464,23 +555,30 @@ bool Input::KeyDoubleClick(Key keyCode) const
     return false;
 }
 
+const InputPointer& Input::GetPointer(unsigned index) const
+{
+    static const InputPointer nullInputPointers;
+    return (index < LLGL_MAX_NUM_INPUT_POINTERS ? pimpl_->inputPointers[index] : nullInputPointers);
+}
+
 Offset2D Input::GetMousePosition() const
 {
-    return pimpl_->mousePosition;
+    return pimpl_->inputPointers[0].position;
 }
 
 Offset2D Input::GetMouseMotion() const
 {
     return Offset2D
     {
-        static_cast<std::int32_t>(pimpl_->motionVector[0]),
-        static_cast<std::int32_t>(pimpl_->motionVector[1])
+        static_cast<std::int32_t>(pimpl_->inputPointers[0].dX),
+        static_cast<std::int32_t>(pimpl_->inputPointers[0].dY)
     };
 }
 
+//TODO: refactor this interface to support both Dx and Dy
 int Input::GetWheelMotion() const
 {
-    return pimpl_->wheelMotion;
+    return static_cast<int>(pimpl_->wheelMotion[1]);
 }
 
 const UTF8String& Input::GetEnteredChars() const
@@ -491,6 +589,16 @@ const UTF8String& Input::GetEnteredChars() const
 unsigned Input::GetAnyKeyCount() const
 {
     return pimpl_->anyKeyCount;
+}
+
+void Input::SetInputHandling(InputHandling inputHandling)
+{
+    pimpl_->inputHandling = inputHandling;
+}
+
+InputHandling Input::GetInputHandling() const
+{
+    return pimpl_->inputHandling;
 }
 
 #undef KEY_IDX

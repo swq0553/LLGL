@@ -40,14 +40,14 @@ bool LoadVKProc(VkDevice device, T& procAddr, const char* procName)
 using LoadVKExtensionInstanceProc   = std::function<bool(VkInstance instance, const char* extName, bool abortOnFailure)>;
 using LoadVKExtensionDeviceProc     = std::function<bool(VkDevice   device  , const char* extName, bool abortOnFailure)>;
 
-#define DECL_LOADVKEXT_PROC_BASE(EXTNAME, HNDL) \
-    Load_VK_ ## EXTNAME(HNDL handle, const char* extName, bool abortOnFailure)
+#define DECL_LOADVKEXT_PROC_BASE(TYPE, EXTNAME, HNDL) \
+    Load_VK ## TYPE ## _ ## EXTNAME(HNDL handle, const char* extName, bool abortOnFailure)
 
 #define DECL_LOADVKEXT_PROC_INSTANCE(EXTNAME) \
-    DECL_LOADVKEXT_PROC_BASE(EXTNAME, VkInstance)
+    DECL_LOADVKEXT_PROC_BASE(Instance, EXTNAME, VkInstance)
 
 #define DECL_LOADVKEXT_PROC(EXTNAME) \
-    DECL_LOADVKEXT_PROC_BASE(EXTNAME, VkDevice)
+    DECL_LOADVKEXT_PROC_BASE(Device, EXTNAME, VkDevice)
 
 #define LOAD_VKPROC(NAME)                                                           \
     if (!LoadVKProc(handle, NAME, #NAME))                                           \
@@ -91,20 +91,25 @@ static bool DECL_LOADVKEXT_PROC_INSTANCE(KHR_android_surface)
     return true;
 }
 
-#endif // /LLGL_OS_WIN32
+#endif
 
 static bool DECL_LOADVKEXT_PROC_INSTANCE(EXT_debug_marker)
 {
+    #if VK_EXT_debug_marker
     LOAD_VKPROC( vkDebugMarkerSetObjectTagEXT  );
     LOAD_VKPROC( vkDebugMarkerSetObjectNameEXT );
     LOAD_VKPROC( vkCmdDebugMarkerBeginEXT      );
     LOAD_VKPROC( vkCmdDebugMarkerEndEXT        );
     LOAD_VKPROC( vkCmdDebugMarkerInsertEXT     );
     return true;
+    #else
+    return false;
+    #endif // /VK_EXT_debug_marker
 }
 
 static bool DECL_LOADVKEXT_PROC_INSTANCE(EXT_debug_utils)
 {
+    #if VK_EXT_debug_utils
     LOAD_VKPROC( vkCmdBeginDebugUtilsLabelEXT    );
     LOAD_VKPROC( vkCmdEndDebugUtilsLabelEXT      );
     LOAD_VKPROC( vkCmdInsertDebugUtilsLabelEXT   );
@@ -117,17 +122,35 @@ static bool DECL_LOADVKEXT_PROC_INSTANCE(EXT_debug_utils)
     LOAD_VKPROC( vkSetDebugUtilsObjectTagEXT     );
     LOAD_VKPROC( vkSubmitDebugUtilsMessageEXT    );
     return true;
+    #else
+    return false;
+    #endif // /VK_EXT_debug_utils
+}
+
+static bool DECL_LOADVKEXT_PROC_INSTANCE(EXT_headless_surface)
+{
+    #if VK_EXT_headless_surface
+    LOAD_VKPROC( vkCreateHeadlessSurfaceEXT );
+    return true;
+    #else
+    return false;
+    #endif // /VK_EXT_headless_surface
 }
 
 static bool DECL_LOADVKEXT_PROC(EXT_conditional_rendering)
 {
+    #if VK_EXT_conditional_rendering
     LOAD_VKPROC( vkCmdBeginConditionalRenderingEXT );
     LOAD_VKPROC( vkCmdEndConditionalRenderingEXT   );
     return true;
+    #else
+    return false;
+    #endif // /VK_EXT_conditional_rendering
 }
 
 static bool DECL_LOADVKEXT_PROC(KHR_get_physical_device_properties2)
 {
+    #if VK_KHR_get_physical_device_properties2
     LOAD_VKPROC( vkGetPhysicalDeviceFeatures2KHR                    );
     LOAD_VKPROC( vkGetPhysicalDeviceProperties2KHR                  );
     LOAD_VKPROC( vkGetPhysicalDeviceFormatProperties2KHR            );
@@ -136,10 +159,36 @@ static bool DECL_LOADVKEXT_PROC(KHR_get_physical_device_properties2)
     LOAD_VKPROC( vkGetPhysicalDeviceMemoryProperties2KHR            );
     LOAD_VKPROC( vkGetPhysicalDeviceSparseImageFormatProperties2KHR );
     return true;
+    #else
+    return false;
+    #endif // /VK_KHR_get_physical_device_properties2
+}
+
+// Instance functions for KHR_fragment_shading_rate
+static bool DECL_LOADVKEXT_PROC_INSTANCE(KHR_fragment_shading_rate)
+{
+    #if VK_KHR_fragment_shading_rate
+    LOAD_VKPROC( vkGetPhysicalDeviceFragmentShadingRatesKHR );
+    return true;
+    #else
+    return false;
+    #endif // /VK_KHR_fragment_shading_rate
+}
+
+// Device functions for KHR_fragment_shading_rate
+static bool DECL_LOADVKEXT_PROC(KHR_fragment_shading_rate)
+{
+    #if VK_KHR_fragment_shading_rate
+    LOAD_VKPROC( vkCmdSetFragmentShadingRateKHR );
+    return true;
+    #else
+    return false;
+    #endif // /VK_KHR_fragment_shading_rate
 }
 
 static bool DECL_LOADVKEXT_PROC(EXT_transform_feedback)
 {
+    #if VK_EXT_transform_feedback
     LOAD_VKPROC( vkCmdBindTransformFeedbackBuffersEXT );
     LOAD_VKPROC( vkCmdBeginTransformFeedbackEXT       );
     LOAD_VKPROC( vkCmdEndTransformFeedbackEXT         );
@@ -147,6 +196,31 @@ static bool DECL_LOADVKEXT_PROC(EXT_transform_feedback)
     LOAD_VKPROC( vkCmdEndQueryIndexedEXT              );
     LOAD_VKPROC( vkCmdDrawIndirectByteCountEXT        );
     return true;
+    #else
+    return false;
+    #endif // /VK_EXT_transform_feedback
+}
+
+static bool DECL_LOADVKEXT_PROC(EXT_mesh_shader)
+{
+    #if VK_EXT_mesh_shader
+    LOAD_VKPROC( vkCmdDrawMeshTasksEXT              );
+    LOAD_VKPROC( vkCmdDrawMeshTasksIndirectEXT      );
+    LOAD_VKPROC( vkCmdDrawMeshTasksIndirectCountEXT ); // Requires VK_KHR_draw_indirect_count or VK_AMD_draw_indirect_count
+    return true;
+    #else
+    return false;
+    #endif // /VK_EXT_mesh_shader
+}
+
+static bool DECL_LOADVKEXT_PROC(KHR_create_renderpass2)
+{
+    #if VK_KHR_create_renderpass2
+    LOAD_VKPROC( vkCreateRenderPass2KHR );
+    return true;
+    #else
+    return false;
+    #endif // /VK_KHR_create_renderpass2
 }
 
 #undef DECL_LOADVKEXT_PROC_BASE
@@ -183,22 +257,31 @@ bool VKLoadInstanceExtensions(VkInstance instance, const ArrayView<const char*>&
     };
 
     #define LOAD_VKEXT(NAME) \
-        LoadExtension(VKExt::NAME, "VK_" #NAME, Load_VK_##NAME)
+        LoadExtension(VKExt::NAME, "VK_" #NAME, Load_VKInstance_##NAME)
 
     /* Load platform specific extensions */
     #if defined LLGL_OS_WIN32
-        LOAD_VKEXT( KHR_win32_surface );
+
+    LOAD_VKEXT( KHR_win32_surface );
+
     #elif defined LLGL_OS_LINUX
-        LOAD_VKEXT( KHR_xlib_surface );
-        #if LLGL_LINUX_ENABLE_WAYLAND
-        LOAD_VKEXT( KHR_wayland_surface );
-        #endif
+
+    LOAD_VKEXT( KHR_xlib_surface );
+
+    #   if LLGL_LINUX_ENABLE_WAYLAND
+    LOAD_VKEXT( KHR_wayland_surface );
+    #   endif
+
     #elif defined LLGL_OS_ANDROID
-        LOAD_VKEXT( KHR_android_surface );
+
+    LOAD_VKEXT( KHR_android_surface );
+
     #endif // /LLGL_OS_WIN32
 
-    LOAD_VKEXT( EXT_debug_marker );
-    LOAD_VKEXT( EXT_debug_utils  );
+    LOAD_VKEXT( EXT_debug_marker          );
+    LOAD_VKEXT( EXT_debug_utils           );
+    LOAD_VKEXT( EXT_headless_surface      );
+    LOAD_VKEXT( KHR_fragment_shading_rate );
 
     #undef LOAD_VKEXT
 
@@ -237,19 +320,24 @@ bool VKLoadDeviceExtensions(VkDevice device, const ArrayView<const char*>& suppo
     };
 
     #define LOAD_VKEXT(NAME) \
-        LoadExtension(VKExt::NAME, "VK_" #NAME, Load_VK_##NAME)
+        LoadExtension(VKExt::NAME, "VK_" #NAME, Load_VKDevice_##NAME)
 
     #define ENABLE_VKEXT(NAME) \
         EnableExtension(VKExt::NAME, "VK_" #NAME)
 
     /* Multi-vendor extensions */
     LOAD_VKEXT( KHR_get_physical_device_properties2 );
+    LOAD_VKEXT( KHR_fragment_shading_rate           );
     LOAD_VKEXT( EXT_conditional_rendering           );
     LOAD_VKEXT( EXT_transform_feedback              );
+    LOAD_VKEXT( EXT_mesh_shader                     );
+    LOAD_VKEXT( KHR_create_renderpass2              );
 
+    ENABLE_VKEXT( KHR_multiview                  );
     ENABLE_VKEXT( EXT_conservative_rasterization );
     ENABLE_VKEXT( EXT_nested_command_buffer      );
     ENABLE_VKEXT( KHR_imageless_framebuffer      );
+    ENABLE_VKEXT( KHR_depth_stencil_resolve      );
 
     #undef LOAD_VKEXT
 

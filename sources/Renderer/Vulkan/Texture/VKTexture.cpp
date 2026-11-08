@@ -30,6 +30,22 @@ static VKSwizzleFormat MapToVKSwizzleFormat(const Format format)
         return VKSwizzleFormat::RGBA;
 }
 
+/*
+Returns true if the texture can be created as a transient attachment, i.e. one whose contents
+are produced and consumed entirely within a single render pass. Such an image can carry
+VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT and be backed by lazily-allocated memory, which on a
+tile-based GPU may never be written out to main memory at all.
+
+Beyond being attachment-only, the texture must be multi-sampled: lazily-allocated memory does
+not preserve contents outside the render pass that wrote them, and a single-sampled attachment
+may legitimately be re-attached with AttachmentLoadOp::Load in a later pass. Raw multi-sample
+contents have no such use - they are only ever consumed by a resolve within their own pass.
+*/
+static bool IsTransientAttachment(const TextureDescriptor& desc)
+{
+    return (IsAttachmentOnlyTexture(desc) && IsMultiSampleTexture(desc.type));
+}
+
 VKTexture::VKTexture(
     VkDevice                    device,
     VKDeviceMemoryManager&      deviceMemoryMngr,
@@ -44,9 +60,25 @@ VKTexture::VKTexture(
 {
     /* Create Vulkan image and allocate memory region */
     CreateImage(device, desc);
-    image_.AllocateMemoryRegion(deviceMemoryMngr);
+    image_.AllocateMemoryRegion(deviceMemoryMngr, IsTransientAttachment(desc));
     if (desc.debugName != nullptr)
         SetDebugName(desc.debugName);
+}
+
+VKTexture::VKTexture(VkDevice device, const VKExternalImageInfo &params) :
+    Texture          { params.type, params.bindFlags },
+    device_          { device                        },
+    image_           { /* dummy deleter */           },
+    imageView_       { device, vkDestroyImageView    },
+    format_          { params.format                 },
+    extent_          { params.extent                 },
+    numMipLevels_    { params.numMipLevels           },
+    numArrayLayers_  { params.numArrayLayers         },
+    sampleCountBits_ { params.sampleCountBits        },
+    usageFlags_      { params.usageFlags             }
+{
+    image_.TakeVkImageOwnership(params.image, params.initialLayout);
+    CreateInternalImageView(device);
 }
 
 bool VKTexture::GetNativeHandle(void* nativeHandle, std::size_t nativeHandleSize)
@@ -155,9 +187,31 @@ TextureDescriptor VKTexture::GetDesc() const
     return texDesc;
 }
 
+// Maps the format from Alpha swizzling to RGBA
+static Format MapVKSwizzleFormatAlpha(const Format format)
+{
+    switch (format)
+    {
+        case Format::R8UNorm:   return Format::A8UNorm;
+        default:                return format;
+    }
+}
+
+// Returns the texture format for the specified texture swizzling
+static Format MapVKSwizzleFormat(const Format format, const VKSwizzleFormat swizzle)
+{
+    switch (swizzle)
+    {
+        case VKSwizzleFormat::Alpha:    return MapVKSwizzleFormatAlpha(format);
+        default:                        return format;
+    }
+}
+
 Format VKTexture::GetFormat() const
 {
-    return VKTypes::Unmap(GetVkFormat());
+    /* Translate internal format depending on texture swizzle since A8UNorm is not natively supported in VkFormat */
+    const Format format = VKTypes::Unmap(GetVkFormat());
+    return MapVKSwizzleFormat(format, swizzleFormat_);
 }
 
 SubresourceFootprint VKTexture::GetSubresourceFootprint(std::uint32_t mipLevel) const
@@ -170,7 +224,7 @@ SubresourceFootprint VKTexture::GetSubresourceFootprint(std::uint32_t mipLevel) 
 
 void VKTexture::SetDebugName(const char* name)
 {
-    #if VK_EXT_debug_marker
+    #if VK_EXT_debug_utils
     VKSetDebugName(device_, VK_OBJECT_TYPE_IMAGE, reinterpret_cast<std::uint64_t>(GetVkImage()), name);
     #endif
 }
@@ -266,7 +320,7 @@ void VKTexture::CreateImageView(
 
 static bool UsageFlagsAllowImageViews(VkImageUsageFlags flags)
 {
-    /* Vulkan only alows image views on images that were created with these usage flags */
+    /* Vulkan only allows image views on images that were created with these usage flags */
     constexpr VkImageUsageFlags requiredFlags =
     (
         VK_IMAGE_USAGE_SAMPLED_BIT                              |
@@ -439,6 +493,17 @@ static VkSampleCountFlagBits GetVkImageSampleCountFlags(const TextureDescriptor&
 
 static VkImageUsageFlags GetVkImageUsageFlags(const TextureDescriptor& desc)
 {
+    /* A transient attachment must carry no usage beyond the attachment bits - Vulkan forbids combining
+       TRANSIENT_ATTACHMENT with transfer, sampled, or storage usage, since its contents never leave the
+       render pass. Handled up front so the transfer bits below are not applied. */
+    if (IsTransientAttachment(desc))
+    {
+        if ((desc.bindFlags & BindFlags::DepthStencilAttachment) != 0)
+            return VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT | VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+        else
+            return VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    }
+
     VkImageUsageFlags usageFlags = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 
     /* Enable TRANSFER_SRC_BIT image usage when MIP-maps are enabled, CPU read access or copy source binding is requested */

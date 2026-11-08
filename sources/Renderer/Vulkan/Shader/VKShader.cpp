@@ -15,6 +15,7 @@
 #include "../../../Core/ReportUtils.h"
 #include "../../../Core/Assertion.h"
 #include "../../PipelineStateUtils.h"
+#include "../RenderState/VKGraphicsPSO.h"
 #include <LLGL/Utils/TypeNames.h>
 #include <LLGL/Utils/ForRange.h>
 #include <string.h>
@@ -24,7 +25,6 @@
 #if LLGL_VK_ENABLE_SPIRV_REFLECT
 #   include "../../SPIRV/SpirvReflect.h"
 #endif
-
 
 namespace LLGL
 {
@@ -46,15 +46,19 @@ static VKPtr<VkShaderModule> CreateVkShaderModule(VkDevice device, const std::ve
     return shaderModule;
 }
 
+LLGL_DEPRECATED_IGNORE_PUSH()
+
 VKShader::VKShader(VkDevice device, const ShaderDescriptor& desc) :
     Shader  { desc.type },
     device_ { device    }
 {
     BuildShader(desc);
-    BuildInputLayout(desc.vertex.inputAttribs.size(), desc.vertex.inputAttribs.data());
+    VKGraphicsPSO::BuildInputLayout(desc.vertex.inputAttribs, inputLayout_);
     BuildBindingLayout();
     BuildReport();
 }
+
+LLGL_DEPRECATED_IGNORE_POP()
 
 VKShader::~VKShader()
 {
@@ -75,35 +79,6 @@ void VKShader::FillShaderStageCreateInfo(VkPipelineShaderStageCreateInfo& create
     createInfo.module               = shaderModule_;
     createInfo.pName                = entryPoint_.c_str();
     createInfo.pSpecializationInfo  = nullptr;
-}
-
-void VKShader::FillVertexInputStateCreateInfo(VkPipelineVertexInputStateCreateInfo& createInfo) const
-{
-    createInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    createInfo.pNext = nullptr;
-    createInfo.flags = 0;
-
-    if (inputLayout_.bindingDescs.empty())
-    {
-        createInfo.vertexBindingDescriptionCount    = 0;
-        createInfo.pVertexBindingDescriptions       = nullptr;
-    }
-    else
-    {
-        createInfo.vertexBindingDescriptionCount    = static_cast<std::uint32_t>(inputLayout_.bindingDescs.size());
-        createInfo.pVertexBindingDescriptions       = inputLayout_.bindingDescs.data();
-    }
-
-    if (inputLayout_.attribDescs.empty())
-    {
-        createInfo.vertexAttributeDescriptionCount  = 0;
-        createInfo.pVertexAttributeDescriptions     = nullptr;
-    }
-    else
-    {
-        createInfo.vertexAttributeDescriptionCount  = static_cast<std::uint32_t>(inputLayout_.attribDescs.size());
-        createInfo.pVertexAttributeDescriptions     = inputLayout_.attribDescs.data();
-    }
 }
 
 bool VKShader::NeedsShaderModulePermutation(const PermutationBindingFunc& permutationBindingFunc) const
@@ -142,7 +117,7 @@ VKPtr<VkShaderModule> VKShader::CreateVkShaderModulePermutation(const Permutatio
             modified = true;
     }
 
-    /* Create shader module permuation if there is at least one modified binding slot */
+    /* Create shader module permutation if there is at least one modified binding slot */
     if (modified)
     {
         VKShaderCode shaderCodePerm = shaderCode_;
@@ -279,6 +254,7 @@ static SystemValue SpvBuiltinToSystemValue(spv::BuiltIn type)
         case spv::BuiltInFragStencilRefEXT: return SystemValue::Stencil;
         case spv::BuiltInVertexId:          return SystemValue::VertexID;
         case spv::BuiltInVertexIndex:       return SystemValue::VertexID;
+        case spv::BuiltInViewIndex:         return SystemValue::ViewIndex;
         case spv::BuiltInViewportIndex:     return SystemValue::ViewportIndex;
         default:                            return SystemValue::Undefined;
     }
@@ -495,6 +471,17 @@ bool VKShader::ReflectLocalSize(Extent3D& outLocalSize) const
     return true;
 }
 
+static bool MatchChainedUniformIdent(StringView uniformName, StringView blockName, StringView fieldName)
+{
+    return
+    (
+        uniformName.size() == (blockName.size() + 1 + fieldName.size()) &&
+        uniformName.substr(0, blockName.size()) == blockName &&
+        uniformName[blockName.size()] == '.' &&
+        uniformName.substr(blockName.size() + 1, fieldName.size()) == fieldName
+    );
+}
+
 bool VKShader::ReflectPushConstants(
     const ArrayView<UniformDescriptor>& inUniformDescs,
     std::vector<VKUniformRange>&        outUniformRanges) const
@@ -509,13 +496,24 @@ bool VKShader::ReflectPushConstants(
         return false;
 
     /* Build push constant ranges */
+    const StringView blockName{ block.name };
+
     for_range(i, inUniformDescs.size())
     {
         /* Find name of uniform descriptor in push-constant block fields */
         const UniformDescriptor& uniformDesc = inUniformDescs[i];
+        const StringView uniformName{ uniformDesc.name };
+        const bool hasChainedIdent = (uniformName.find('.') != StringLiteral::npos);
+
         for (const SpirvReflect::SpvBlockField& field : block.fields)
         {
-            if (field.name != nullptr && ::strcmp(field.name, uniformDesc.name.c_str()) == 0)
+            /*
+            Accept both simple and chained uniform identifiers,
+            since SPIR-V can only have a single push constant struct, so there can't be any overlap of member names.
+            */
+            const StringView fieldName{ field.name };
+            if ((!hasChainedIdent && fieldName == uniformDesc.name) ||
+                ( hasChainedIdent && MatchChainedUniformIdent(uniformName, blockName, fieldName)))
             {
                 VKUniformRange& range = outUniformRanges[i];
                 {
@@ -564,61 +562,9 @@ bool VKShader::BuildShader(const ShaderDescriptor& shaderDesc)
         return LoadBinary(shaderDesc);
 }
 
-// Helper structure to build set of <VkVertexInputBindingDescription> elements
-struct VKCompareVertexBindingDesc
-{
-    inline bool operator () (const VkVertexInputBindingDescription& lhs, const VkVertexInputBindingDescription& rhs) const
-    {
-        return (lhs.binding < rhs.binding);
-    }
-};
-
-void VKShader::BuildInputLayout(std::size_t numVertexAttribs, const VertexAttribute* vertexAttribs)
-{
-    if (numVertexAttribs == 0 || vertexAttribs == nullptr)
-        return;
-
-    inputLayout_.bindingDescs.reserve(numVertexAttribs);
-
-    std::set<VkVertexInputBindingDescription, VKCompareVertexBindingDesc> bindingDescSet;
-
-    for_range(i, numVertexAttribs)
-    {
-        const VertexAttribute& attr = vertexAttribs[i];
-
-        LLGL_ASSERT(
-            !(attr.instanceDivisor > 1),
-            "vertex instance divisor must be 0 or 1 for Vulkan, but %u was specified: %s",
-            attr.instanceDivisor, attr.name.c_str()
-        );
-
-        /* Append vertex input attribute descriptor */
-        VkVertexInputAttributeDescription vertexAttrib;
-        {
-            vertexAttrib.location   = attr.location;
-            vertexAttrib.binding    = attr.slot;
-            vertexAttrib.format     = VKTypes::Map(attr.format);
-            vertexAttrib.offset     = attr.offset;
-        }
-        inputLayout_.attribDescs.push_back(vertexAttrib);
-
-        /* Insert vertex binding descriptor */
-        VkVertexInputBindingDescription inputBinding;
-        {
-            inputBinding.binding    = attr.slot;
-            inputBinding.stride     = attr.stride;
-            inputBinding.inputRate  = (attr.instanceDivisor > 0 ? VK_VERTEX_INPUT_RATE_INSTANCE : VK_VERTEX_INPUT_RATE_VERTEX);
-        }
-        bindingDescSet.insert(inputBinding);
-    }
-
-    /* Store binding descriptor in vector */
-    inputLayout_.bindingDescs.insert(inputLayout_.bindingDescs.end(), bindingDescSet.begin(), bindingDescSet.end());
-}
-
 void VKShader::BuildBindingLayout()
 {
-    bindingLayout_.BuildFromSpirvModule(shaderCode_.data(), shaderCode_.size() * sizeof(std::uint32_t));
+    bindingLayout_.BuildFromSpirvModule(shaderCode_.data(), shaderCode_.size() * sizeof(std::uint32_t), &report_);
 }
 
 void VKShader::BuildReport()
@@ -647,16 +593,16 @@ bool VKShader::CompileSource(const ShaderDescriptor& shaderDesc)
 bool VKShader::LoadBinary(const ShaderDescriptor& shaderDesc)
 {
     /* Get shader binary */
-    std::vector<char>   fileContent;
-    const char*         binaryBuffer = nullptr;
-    std::size_t         binaryLength = 0;
+    Blob        fileContent;
+    const void* binaryBuffer = nullptr;
+    std::size_t binaryLength = 0;
 
     if (shaderDesc.sourceType == ShaderSourceType::BinaryFile)
     {
         /* Load binary from file */
-        fileContent = ReadFileBuffer(shaderDesc.source);
-        binaryBuffer = fileContent.data();
-        binaryLength = fileContent.size();
+        fileContent = Blob::CreateFromFile(shaderDesc.source);
+        binaryBuffer = fileContent.GetData();
+        binaryLength = fileContent.GetSize();
     }
     else
     {

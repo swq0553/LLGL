@@ -25,10 +25,10 @@ DEF_TEST( CommandBufferEncode )
         TestCmdBufferSecondary0,
         TestCmdBufferSecondary1,
 
-        TestCmdBuffer_Count,
+        TestCmdBuffer_Num,
     };
 
-    static CommandBuffer* cmdBuffers[TestCmdBuffer_Count] = {};
+    static CommandBuffer* cmdBuffers[TestCmdBuffer_Num] = {};
     static Texture* framebufferResultTex[2] = {};
     static PipelineLayout* psoLayout;
     static PipelineState* pso;
@@ -60,7 +60,7 @@ DEF_TEST( CommandBufferEncode )
             if (renderer->GetRendererID() == LLGL::RendererID::Vulkan)
                 cmdBuf.SetViewport(swapChain->GetResolution());
 
-            cmdBuf.SetVertexBuffer(*this->meshBuffer);
+            cmdBuf.SetVertexBuffer(*this->meshBuffer); // Dummy
             cmdBuf.SetUniforms(0, clearValue.color, sizeof(clearValue.color));
             cmdBuf.Draw(3, 0);
         }
@@ -117,7 +117,7 @@ DEF_TEST( CommandBufferEncode )
         framebufferResultTex[1] = renderer->CreateTexture(texDesc, &initialImage);
 
         // Create multi-submit command buffers
-        for_range(i, TestCmdBuffer_Count)
+        for_range(i, TestCmdBuffer_Num)
         {
             CommandBufferDescriptor cmdBufferDesc;
             {
@@ -137,7 +137,7 @@ DEF_TEST( CommandBufferEncode )
             psoDesc.renderPass          = swapChain->GetRenderPass();
             psoDesc.vertexShader        = shaders[VSClear];
             psoDesc.fragmentShader      = shaders[PSClear];
-            //psoDesc.primitiveTopology   = PrimitiveTopology::PointList;
+          //psoDesc.primitiveTopology   = PrimitiveTopology::PointList;
         }
         CREATE_GRAPHICS_PSO_EXT(pso, psoDesc, "psoCmdBufEncode");
     }
@@ -189,6 +189,7 @@ DEF_TEST( CommandBufferEncode )
             else
             {
                 Log::Errorf(
+                    Log::ColorFlags::StdError,
                     "Mismatch between framebuffer[%u] color [%02X %02X %02X %02X] and clear value [%02X %02X %02X %02X]\n",
                     i,
                     framebufferResult[0], framebufferResult[1], framebufferResult[2], framebufferResult[3],

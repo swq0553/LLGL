@@ -14,6 +14,8 @@
 #include "GLDepthStencilState.h"
 #include "GLRasterizerState.h"
 #include "GLBlendState.h"
+#include "../Buffer/GLVertexInputLayout.h"
+#include "../../StaticStateBuffer.h"
 #include <LLGL/RenderSystemFlags.h>
 #include <LLGL/Container/DynamicArray.h>
 
@@ -37,6 +39,17 @@ class GLGraphicsPSO final : public GLPipelineState
         // Binds this graphics pipeline state with the specified GL state manager.
         void Bind(GLStateManager& stateMngr) override;
 
+        /*
+        Returns the vertex input layout for this PSO.
+        NOTE:
+          This class interprest `GLVertexAttribute::buffer` as a zero-based index,
+          not the actual GL buffer ID as it is required by GLVertexArrayCache.
+        */
+        inline const GLVertexInputLayout& GetVertexInputLayout() const
+        {
+            return vertexInputLayout_;
+        }
+
         // Returns the GL mode for drawing commands (GL_TRIANGLES, GL_TRIANGLE_STRIP, etc.).
         inline GLenum GetDrawMode() const
         {
@@ -52,11 +65,7 @@ class GLGraphicsPSO final : public GLPipelineState
     private:
 
         void BuildStaticStateBuffer(const GraphicsPipelineDescriptor& desc);
-        void BuildStaticViewports(std::size_t numViewports, const Viewport* viewports, ByteBufferIterator& byteBufferIter);
-        void BuildStaticScissors(std::size_t numScissors, const Scissor* scissors, ByteBufferIterator& byteBufferIter);
-
-        void SetStaticViewports(GLStateManager& stateMngr, ByteBufferIterator& byteBufferIter);
-        void SetStaticScissors(GLStateManager& stateMngr, ByteBufferIterator& byteBufferIter);
+        void SetStaticViewportsAndScissors(GLStateManager& stateMngr);
 
     private:
 
@@ -64,6 +73,7 @@ class GLGraphicsPSO final : public GLPipelineState
         GLenum                  drawMode_           = GL_TRIANGLES; // for glDraw*
         GLenum                  primitiveMode_      = GL_TRIANGLES; // for glBeginTransformFeedback*
         GLint                   patchVertices_      = 0;
+        GLVertexInputLayout     vertexInputLayout_;
 
         // State objects
         GLDepthStencilStateSPtr depthStencilState_;
@@ -71,10 +81,7 @@ class GLGraphicsPSO final : public GLPipelineState
         GLBlendStateSPtr        blendState_;
 
         // Packed byte buffer for static viewports and scissors
-        DynamicByteArray        staticStateBuffer_;
-        GLsizei                 numStaticViewports_ = 0;
-        GLsizei                 numStaticScissors_  = 0;
-
+        StaticStateBuffer       staticStateBuffer_;
 };
 
 

@@ -23,16 +23,17 @@ jobs:
 
     steps:
     - name: Checkout Repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
       with:
         submodules: recursive
 
     - name: Install Dependencies
       run: |
+        echo "-------------- Install Vulkan SDK --------------"
         sudo wget -O /etc/apt/trusted.gpg.d/lunarg-signing-key-pub.asc http://packages.lunarg.com/lunarg-signing-key-pub.asc
         sudo wget -O /etc/apt/sources.list.d/lunarg-vulkan-noble.list http://packages.lunarg.com/vulkan/lunarg-vulkan-noble.list
         sudo apt update
-        sudo apt-get install libx11-dev libxrandr-dev libglu1-mesa-dev freeglut3-dev mesa-common-dev vulkan-sdk vulkan-tools
+        sudo apt-get install libx11-dev libxrandr-dev libglu1-mesa-dev freeglut3-dev mesa-common-dev mesa-vulkan-drivers vulkan-sdk vulkan-tools
 
     - name: Configure CMake
       run: >
@@ -53,7 +54,7 @@ jobs:
       run: cmake --build ${{github.workspace}}/Linux-x86_64 --config ${{ matrix.config }}
 
     - name: Upload Binaries
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v6
       if: matrix.ext == 'Full' && matrix.lib == 'Shared' && matrix.config == 'Release'
       with:
         name: LLGL-Ubuntu-${{ matrix.config }}-x86_64
@@ -66,16 +67,19 @@ jobs:
     - name: Testbed
       working-directory: tests/Testbed
       run: |
-        xvfb-run ${{github.workspace}}/Linux-x86_64/build/${{ matrix.config == 'Debug' && 'TestbedD' || 'Testbed' }} gl -v -f -t -g ${{ matrix.config == 'Debug' && '-d' || '' }}
+        export VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json
+        xvfb-run ${{github.workspace}}/Linux-x86_64/build/${{ matrix.config == 'Debug' && 'TestbedD' || 'Testbed' }} gl ${{ env.EXT_FULL == 'ON' && 'vk' || '' }} -vftgi ${{ matrix.config == 'Debug' && '-d' || '' }}
         CURRENT_TIME=$(date)
         echo "LLGL built with GCC for Linux on $CURRENT_TIME." > ${{ env.README }}
         echo "Place at root of LLGL repository to run examples and testbed." >> ${{ env.README }}
 
     - name: Upload Test Report
-      uses: actions/upload-artifact@v4
-      if: ${{ always() && matrix.ext == 'Full' && matrix.lib == 'Shared' && matrix.config == 'Release' }}
+      uses: actions/upload-artifact@v6
+      if: ${{ always() && matrix.ext == 'Full' && matrix.lib == 'Shared' }}
       with:
-        name: LLGL-Ubuntu-Test_Report
+        name: LLGL-Ubuntu-Test_Report-${{ matrix.config }}
         path: |
           tests/Testbed/Output/OpenGL/*.png
           tests/Testbed/Output/OpenGL/Report.txt
+          tests/Testbed/Output/Vulkan/*.png
+          tests/Testbed/Output/Vulkan/Report.txt

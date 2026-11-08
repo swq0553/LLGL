@@ -42,6 +42,39 @@ D3D12Texture::D3D12Texture(ID3D12Device* device, const TextureDescriptor& desc) 
         SetDebugName(desc.debugName);
 }
 
+D3D12Texture::D3D12Texture(
+    ID3D12Device*           device,
+    TextureType             type,
+    long                    bindFlags,
+    D3D12_RESOURCE_STATES   initialState,
+    ID3D12Resource*         externalTexture,
+    Format                  logicalFormat)
+:
+    Texture { type, bindFlags }
+{
+    // ComPtr::operator= AddRef's the new pointer; the externally-owned resource stays alive
+    // via its own ref-counts and we add one more for the lifetime of this wrapper.
+    resource_.native = externalTexture;
+    resource_.SetInitialState(initialState);
+
+    // Query the resource's actual D3D12 description (the runtime may have substituted a
+    // typeless format for the requested typed one). Keep the actual (possibly typeless) DXGI format
+    // as format_ for the resource itself.
+    const D3D12_RESOURCE_DESC actualDesc = externalTexture->GetDesc();
+    format_         = actualDesc.Format;
+    numMipLevels_   = actualDesc.MipLevels;
+    numArrayLayers_ = actualDesc.DepthOrArraySize;
+    extent_.width   = static_cast<std::uint32_t>(actualDesc.Width);
+    extent_.height  = actualDesc.Height;
+    extent_.depth   = 1u;
+
+    // The explicit view format comes from the caller-supplied logical (typed) format. Unmap cannot
+    // resolve a typeless DXGI format to a concrete LLGL format (it would yield Format::Undefined ->
+    // DXGI_FORMAT_UNKNOWN, which faults SRV/RTV creation), so the logical format is required for
+    // typeless images; fall back to Unmap only when the caller didn't supply one.
+    baseFormat_ = (logicalFormat != Format::Undefined ? logicalFormat : DXTypes::Unmap(format_));
+}
+
 bool D3D12Texture::GetNativeHandle(void* nativeHandle, std::size_t nativeHandleSize)
 {
     if (auto* nativeHandleD3D = GetTypedNativeHandle<Direct3D12::ResourceNativeHandle>(nativeHandle, nativeHandleSize))
@@ -549,7 +582,7 @@ void D3D12Texture::CreateUnorderedAccessView(ID3D12Device* device, D3D12_CPU_DES
         device,
         D3D12Types::MapUavDimension(GetType()),
         format_,
-        TextureSubresource{ 0, numArrayLayers_, 0, 1 },
+        TextureSubresource{ 0, GetDepthOrArraySize(), 0, 1 },
         cpuDescHandle
     );
 }
@@ -902,6 +935,11 @@ void D3D12Texture::CreateMipDescHeap(ID3D12Device* device)
             cpuDescHandle.ptr += descSize;
         }
     }
+}
+
+UINT D3D12Texture::GetDepthOrArraySize() const
+{
+    return (GetType() == TextureType::Texture3D ? extent_.depth : numArrayLayers_);
 }
 
 

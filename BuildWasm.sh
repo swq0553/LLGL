@@ -6,6 +6,7 @@ CLEAR_CACHE=0
 ENABLE_EXAMPLES="ON"
 ENABLE_TESTS="ON"
 ENABLE_PTHREADS="OFF"
+ENABLE_EXPLICIT_SWAP_CONTROL="OFF"
 BUILD_TYPE="Release"
 UNITY_BUILD="OFF"
 PROJECT_ONLY=0
@@ -27,6 +28,7 @@ print_help()
     echo "  --no-examples ............. Exclude example projects"
     echo "  --no-tests ................ Exclude test projects"
     echo "  --pthreads ................ Enable pthreads (limits browser availability)"
+    echo "  --explicit-swap-control ... Enable explicit swap control (requires offscreen framebuffer)"
     echo "NOTES:"
     echo "  Default output directory is '$OUTPUT_DIR'"
 }
@@ -62,6 +64,8 @@ for ARG in "$@"; do
         ENABLE_TESTS="OFF"
     elif [ "$ARG" = "--pthreads" ]; then
         ENABLE_PTHREADS="ON"
+    elif [ "$ARG" = "--explicit-swap-control" ]; then
+        ENABLE_EXPLICIT_SWAP_CONTROL="ON"
     else
         OUTPUT_DIR="$ARG"
     fi
@@ -92,7 +96,7 @@ get_realpath()
     fi
 }
 
-# Checkout external depenencies
+# Checkout external dependencies
 GAUSSIAN_LIB_DIR="GaussianLib/include"
 
 if [ -f "$SOURCE_DIR/external/$GAUSSIAN_LIB_DIR/Gauss/Gauss.h" ]; then
@@ -127,11 +131,10 @@ if [ ! -f "$EMSCRIPTEN_CMAKE_TOOLCHAIN" ]; then
     exit 1
 fi
 
-# Build into output directory (this syntax requried CMake 3.13+)
+# Build into output directory (this syntax required CMake 3.13+)
 OPTIONS=(
     -DCMAKE_TOOLCHAIN_FILE="$EMSCRIPTEN_CMAKE_TOOLCHAIN"
     -DLLGL_BUILD_RENDERER_WEBGL=ON
-    -DLLGL_GL_ENABLE_OPENGL2X=OFF
     -DLLGL_BUILD_RENDERER_NULL=OFF
     -DLLGL_BUILD_RENDERER_VULKAN=OFF
     -DLLGL_BUILD_RENDERER_DIRECT3D11=OFF
@@ -140,6 +143,7 @@ OPTIONS=(
     -DLLGL_BUILD_TESTS=$ENABLE_TESTS
     -DLLGL_BUILD_STATIC_LIB=ON
     -DLLGL_ENABLE_EMSCRIPTEN_PTHREADS=$ENABLE_PTHREADS
+    -DLLGL_ENABLE_EXPLICIT_SWAP_CONTROL=$ENABLE_EXPLICIT_SWAP_CONTROL
     -DLLGL_UNITY_BUILD=$UNITY_BUILD
     -DGaussLib_INCLUDE_DIR:STRING="$GAUSSIAN_LIB_DIR"
     -S "$SOURCE_DIR"
@@ -147,13 +151,13 @@ OPTIONS=(
 )
 
 if [ $PROJECT_ONLY -eq 0 ]; then
-    cmake -DCMAKE_BUILD_TYPE=$BUILD_TYPE ${OPTIONS[@]}
+    cmake -DCMAKE_BUILD_TYPE=$BUILD_TYPE "${OPTIONS[@]}"
     cmake --build "$OUTPUT_DIR" -- -j 20
 else
-    cmake ${OPTIONS[@]} -G "$GENERATOR"
+    cmake "${OPTIONS[@]}" -G "$GENERATOR"
 fi
 
-# Copys the input file to the output and removes '\r' EOL characters from text files.
+# Copies the input file to the output and removes '\r' EOL characters from text files.
 # Web page will run on Linux server and Git must not convert EOL for this output file.
 # Otherwise, data offsets in the *.data.js script won't match with the *.data file after Git uploaded it.
 copy_file_preserve_linux_eol()
@@ -176,9 +180,17 @@ copy_file_preserve_linux_eol()
 
 # Generate HTML pages
 if [ $PROJECT_ONLY -eq 0 ] && [ $ENABLE_EXAMPLES == "ON" ]; then
-    scripts/GenerateHTML5Examples.sh                    \
-        "${SOURCE_DIR}"                                 \
-        "${OUTPUT_DIR}"                                 \
-        $([ $BUILD_TYPE = "Debug" ] && echo "--debug")  \
+    GEN_HTML5_ARGS=(
+        "${SOURCE_DIR}"
+        "${OUTPUT_DIR}"
+        $([ $BUILD_TYPE = "Debug" ] && echo "--debug")
         $([ $VERBOSE -ne 0 ] && echo "--verbose")
+    )
+
+    # If this is run in WSL2 on Windows, remove carriage return characters (Windows EOL) from the script before executing it
+    if grep -q $'\r$' scripts/GenerateHTML5Examples.sh; then
+        tr -d '\r' < scripts/GenerateHTML5Examples.sh | bash -s -- "${GEN_HTML5_ARGS[@]}"
+    else
+        scripts/GenerateHTML5Examples.sh "${GEN_HTML5_ARGS[@]}"
+    fi
 fi

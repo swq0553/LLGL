@@ -14,6 +14,7 @@
 #include <android/native_activity.h>
 #include <mutex>
 #include <float.h>
+#include <LLGL/Utils/ForRange.h>
 
 
 namespace LLGL
@@ -67,8 +68,7 @@ void AndroidInputEventHandler::BroadcastCommand(android_app* app, int32_t cmd)
 
         case APP_CMD_WINDOW_RESIZED:
         {
-            const Extent2D contentSize = AndroidApp::GetContentRectSize(app);
-            FOREACH_CANVAS_CALL(PostResize(contentSize));
+            FOREACH_CANVAS_CALL(PostResize(AndroidApp::GetContentRectSize(app)));
         }
         break;
 
@@ -116,39 +116,74 @@ std::int32_t AndroidInputEventHandler::BroadcastInputEvent(android_app* app, AIn
 
         case AINPUT_EVENT_TYPE_MOTION:
         {
-            const float posX = AMotionEvent_getX(event, 0);
-            const float posY = AMotionEvent_getY(event, 0);
+            std::int32_t action = AMotionEvent_getAction(event);
+            std::int32_t maskedAction = (action & AMOTION_EVENT_ACTION_MASK);
+            std::uint32_t pointerIndex = static_cast<std::uint32_t>((action & AMOTION_EVENT_ACTION_POINTER_INDEX_MASK) >> AMOTION_EVENT_ACTION_POINTER_INDEX_SHIFT);
 
-            const LLGL::Offset2D position{ static_cast<std::int32_t>(posX), static_cast<std::int32_t>(posY) };
             const std::uint32_t numTouches = static_cast<std::uint32_t>(AMotionEvent_getPointerCount(event));
+            LLGL_ASSERT(numTouches <= LLGL_MAX_NUM_INPUT_POINTERS);
+            LLGL_ASSERT(pointerIndex <= LLGL_MAX_NUM_INPUT_POINTERS);
 
-            switch (AMotionEvent_getAction(event))
+            switch (maskedAction)
             {
                 case AMOTION_EVENT_ACTION_DOWN:
+                case AMOTION_EVENT_ACTION_POINTER_DOWN:
                 {
+                    std::int32_t pointerId = AMotionEvent_getPointerId(event, pointerIndex);
+                    LLGL_ASSERT(pointerId >= 0 && pointerId < LLGL_MAX_NUM_INPUT_POINTERS);
+
+                    /* Get current touch position */
+                    const float posX = AMotionEvent_getX(event, pointerIndex);
+                    const float posY = AMotionEvent_getY(event, pointerIndex);
+                    const LLGL::Offset2D position{ static_cast<std::int32_t>(posX), static_cast<std::int32_t>(posY) };
+
                     /* Initialize previous position with current position when first touch down is detected */
-                    prevMotionPos_[0] = posX;
-                    prevMotionPos_[1] = posY;
-                    FOREACH_CANVAS_CALL(PostPanGesture(position, numTouches, 0.0f, 0.0f, EventAction::Began));
+                    MotionEvent& motionEvent = motionEvents_[pointerId];
+                    motionEvent.prevPosition[0] = posX;
+                    motionEvent.prevPosition[1] = posY;
+
+                    FOREACH_CANVAS_CALL(PostPanGesture(position, pointerId, numTouches, 0.0f, 0.0f, EventAction::Began));
                 }
                 break;
 
                 case AMOTION_EVENT_ACTION_MOVE:
                 {
-                    /* Determine motion delta by difference between current and previous position */
-                    const float posXPrec = AMotionEvent_getXPrecision(event);
-                    const float posYPrec = AMotionEvent_getYPrecision(event);
-                    const float dx = (posX - prevMotionPos_[0]) / posXPrec;
-                    const float dy = (posY - prevMotionPos_[1]) / posYPrec;
-                    prevMotionPos_[0] = posX;
-                    prevMotionPos_[1] = posY;
-                    FOREACH_CANVAS_CALL(PostPanGesture(position, numTouches, dx, dy, EventAction::Changed));
+                    for_range(pointerIndex, numTouches)
+                    {
+                        std::int32_t pointerId = AMotionEvent_getPointerId(event, pointerIndex);
+                        LLGL_ASSERT(pointerId >= 0 && pointerId < LLGL_MAX_NUM_INPUT_POINTERS);
+
+                        /* Get current touch position */
+                        const float posX = AMotionEvent_getX(event, pointerIndex);
+                        const float posY = AMotionEvent_getY(event, pointerIndex);
+                        const LLGL::Offset2D position{ static_cast<std::int32_t>(posX), static_cast<std::int32_t>(posY) };
+
+                        /* Determine motion delta by difference between current and previous position */
+                        MotionEvent& motionEvent = motionEvents_[pointerId];
+                        const float posXPrec = AMotionEvent_getXPrecision(event);
+                        const float posYPrec = AMotionEvent_getYPrecision(event);
+                        const float dx = (posX - motionEvent.prevPosition[0]) / posXPrec;
+                        const float dy = (posY - motionEvent.prevPosition[1]) / posYPrec;
+                        motionEvent.prevPosition[0] = posX;
+                        motionEvent.prevPosition[1] = posY;
+
+                        FOREACH_CANVAS_CALL(PostPanGesture(position, pointerId, numTouches, dx, dy, EventAction::Changed));
+                    }
                 }
                 break;
 
                 case AMOTION_EVENT_ACTION_UP:
+                case AMOTION_EVENT_ACTION_POINTER_UP:
                 {
-                    FOREACH_CANVAS_CALL(PostPanGesture(position, numTouches, 0.0f, 0.0f, EventAction::Ended));
+                    std::int32_t pointerId = AMotionEvent_getPointerId(event, pointerIndex);
+                    LLGL_ASSERT(pointerId >= 0 && pointerId < LLGL_MAX_NUM_INPUT_POINTERS);
+
+                    /* Get current touch position */
+                    const float posX = AMotionEvent_getX(event, pointerIndex);
+                    const float posY = AMotionEvent_getY(event, pointerIndex);
+                    const LLGL::Offset2D position{ static_cast<std::int32_t>(posX), static_cast<std::int32_t>(posY) };
+
+                    FOREACH_CANVAS_CALL(PostPanGesture(position, pointerId, numTouches, 0.0f, 0.0f, EventAction::Ended));
                 }
                 break;
             }

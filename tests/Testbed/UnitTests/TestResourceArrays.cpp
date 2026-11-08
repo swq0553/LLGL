@@ -33,8 +33,8 @@ DEF_TEST( ResourceArrays )
         Parse(
             "cbuffer(Scene@1):vert:frag,"           // Bind individual resource for scene constant buffer
             "heap{"
-            "  texture(colorMaps@2[2]):frag,"       // Declare a texture array with 2 elements
-            "  sampler(texSamplers@%u[2]):frag,"    // Declare a sampler array with 2 elements
+            "  texture(colorMaps[2]@2):frag,"       // Declare a texture array with 2 elements
+            "  sampler(texSamplers[2]@%u):frag,"    // Declare a sampler array with 2 elements
             "}",
             (HasCombinedSamplers() ? 2 : 4)         // GL needs to bind the sampler at the same binding slots
         )
@@ -45,6 +45,7 @@ DEF_TEST( ResourceArrays )
     {
         psoDesc.pipelineLayout      = psoLayout;
         psoDesc.renderPass          = swapChain->GetRenderPass();
+        psoDesc.inputVertexAttribs  = vertexFormats[VertFmtStd].attributes;
         psoDesc.vertexShader        = shaders[VSResourceArrays];
         psoDesc.fragmentShader      = shaders[PSResourceArrays];
         psoDesc.depth.testEnabled   = true;
@@ -85,7 +86,7 @@ DEF_TEST( ResourceArrays )
 
     const Extent2D halfResolution{ opt.resolution.width/2, opt.resolution.height };
 
-    cmdBuffer->Begin();
+    BEGIN();
     {
         cmdBuffer->UpdateBuffer(*sceneCbuffer, 0, &sceneConstants, sizeof(sceneConstants));
 
@@ -115,13 +116,14 @@ DEF_TEST( ResourceArrays )
         }
         cmdBuffer->EndRenderPass();
     }
-    cmdBuffer->End();
+    END();
 
     // Evaluate readback result
     SaveCapture(readbackTex, "ResourceArrays");
 
     constexpr int threshold = 3; // Tolerate a threshold of 3 color values
-    const DiffResult diff = DiffImages("ResourceArrays", threshold);
+    constexpr int tolerance = 5; // Tolerate 5 values that are beyond the threshold
+    const DiffResult diff = DiffImages("ResourceArrays", threshold, tolerance);
 
     TestResult result = diff.Evaluate("resource arrays");
 

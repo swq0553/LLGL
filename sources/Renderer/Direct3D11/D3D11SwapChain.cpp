@@ -25,14 +25,14 @@ D3D11SwapChain::D3D11SwapChain(
     const SwapChainDescriptor&          desc,
     const std::shared_ptr<Surface>&     surface)
 :
-    SwapChain            { desc                                                       },
-    device_              { device                                                     },
-    renderSystem_        { renderSystem                                               },
-    depthStencilFormat_  { DXPickDepthStencilFormat(desc.depthBits, desc.stencilBits) },
-    renderTargetHandles_ { 1u, (depthStencilFormat_ != DXGI_FORMAT_UNKNOWN)           },
-    tearingSupported_    { renderSystem.IsTearingSupported()                          },
-    colorBufferLocator_  { ResourceType::Texture, BindFlags::ColorAttachment          },
-    depthBufferLocator_  { ResourceType::Texture, BindFlags::DepthStencilAttachment   }
+    SwapChain            { desc                                                                                },
+    device_              { device                                                                              },
+    renderSystem_        { renderSystem                                                                        },
+    depthStencilFormat_  { DXPickDepthStencilFormat(desc.depthStencilFormat, desc.depthBits, desc.stencilBits) },
+    renderTargetHandles_ { 1u, (depthStencilFormat_ != DXGI_FORMAT_UNKNOWN)                                    },
+    tearingSupported_    { renderSystem.IsTearingSupported()                                                   },
+    colorBufferLocator_  { ResourceType::Texture, BindFlags::ColorAttachment                                   },
+    depthBufferLocator_  { ResourceType::Texture, BindFlags::DepthStencilAttachment                            }
 {
     /* Setup surface for the swap-chain */
     SetOrCreateSurface(surface, SwapChain::BuildDefaultSurfaceTitle(renderSystem.GetRendererInfo()), desc);
@@ -267,7 +267,7 @@ void D3D11SwapChain::ResolveSubresources(ID3D11DeviceContext* context)
  * ======= Private: =======
  */
 
-bool D3D11SwapChain::ResizeBuffersPrimary(const Extent2D& resolution)
+Extent2D D3D11SwapChain::ResizeBuffersPrimary(const Extent2D& resolution)
 {
     /* Store current debug names */
     std::string debugNames[5];
@@ -303,7 +303,7 @@ bool D3D11SwapChain::ResizeBuffersPrimary(const Extent2D& resolution)
     if (hasDebugName_)
         RestoreDebugNames(debugNames);
 
-    return true;
+    return resolution;
 }
 
 bool D3D11SwapChain::SetPresentSyncInterval(UINT syncInterval)

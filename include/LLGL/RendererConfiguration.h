@@ -11,6 +11,7 @@
 
 #include <LLGL/Container/ArrayView.h>
 #include <LLGL/Platform/Platform.h>
+#include <LLGL/Deprecated.h>
 #include <cstdint>
 
 
@@ -49,7 +50,7 @@ enum class OpenGLContextProfile
     ESProfile,
 
     //! \deprecated Since 0.04b; Use OpenGLContextProfile::Auto instead!
-    DefaultProfile = Auto, // DEPRECATED
+    DefaultProfile LLGL_DEPRECATED_ENUMCASE("Identifier `DefaultProfile` is deprecated since 0.05b; Use `Auto` instead!", "Auto") = Auto, // DEPRECATED
 };
 
 
@@ -59,6 +60,7 @@ enum class OpenGLContextProfile
 \brief Application descriptor structure.
 \note Only supported with: Vulkan.
 \see RendererConfigurationVulkan::application
+\todo Rename this to ApplicationInfo. "Descriptor" is intended to describe GPU objects like buffer, textures, PSOs etc.
 */
 struct ApplicationDescriptor
 {
@@ -79,6 +81,7 @@ struct ApplicationDescriptor
 \brief Structure for a Vulkan renderer specific configuration.
 \remarks The nomenclature here is "Renderer" instead of "RenderSystem" since the configuration is renderer specific
 and does not denote a configuration of the entire system.
+\todo Move this to LLGL::Vulkan::RendererConfiguration and into folder include/LLGL/Backend/Vulkan/.
 */
 struct RendererConfigurationVulkan
 {
@@ -111,11 +114,32 @@ struct RendererConfigurationVulkan
     \todo Remove this as soon as Vulkan memory manage has been improved.
     */
     bool                        reduceDeviceMemoryFragmentation = false;
+
+    /**
+    \brief List of additional Vulkan instance extensions that must be supported.
+    \remarks If any of them is not supported, the render system fails to load.
+    LLGL already enables the instance extensions it needs, e.g. for surfaces and the debug layer.
+    */
+    ArrayView<const char*>      requiredInstanceExtensions;
+
+    //! List of additional Vulkan instance extensions to enable. The ones that are not supported, will be ignored.
+    ArrayView<const char*>      optionalInstanceExtensions;
+
+    /**
+    \brief List of additional Vulkan device extensions that must be supported.
+    \remarks Physical devices that don't support all of them are not considered.
+    If no physical device supports all of them, the render system fails to load.
+    */
+    ArrayView<const char*>      requiredDeviceExtensions;
+
+    //! List of additional Vulkan device extensions to enable. The ones that are not supported, will be ignored.
+    ArrayView<const char*>      optionalDeviceExtensions;
 };
 
 /**
 \brief OpenGL/OpenGLES profile descriptor structure.
 \note On MacOS the only supported OpenGL profiles are compatibility profile (for lagecy OpenGL before 3.0), 3.2 core profile, or 4.1 core profile.
+\todo Move this to LLGL::OpenGL::RendererConfiguration and into folder include/LLGL/Backend/OpenGL/.
 */
 struct RendererConfigurationOpenGL
 {
@@ -124,14 +148,14 @@ struct RendererConfigurationOpenGL
 
     /**
     \brief Specifies the requested OpenGL context major version. By default 0.
-    \remarks If both \c majorVersion and \c minorVersion are 0, the highest OpenGL version that is available on the host system will be choosen.
+    \remarks If both \c majorVersion and \c minorVersion are 0, the highest OpenGL version that is available on the host system will be chosen.
     \remarks This member is ignored if \c contextProfile is OpenGLContextProfile::CompatibilityProfile.
     */
     int                     majorVersion                = 0;
 
     /**
     \brief Specifies the requested OpenGL context minor version. By default 0.
-    \remarks If both \c majorVersion and \c minorVersion are 0, the highest OpenGL version that is available on the host system will be choosen.
+    \remarks If both \c majorVersion and \c minorVersion are 0, the highest OpenGL version that is available on the host system will be chosen.
     \remarks This member is ignored if \c contextProfile is OpenGLContextProfile::CompatibilityProfile.
     */
     int                     minorVersion                = 0;

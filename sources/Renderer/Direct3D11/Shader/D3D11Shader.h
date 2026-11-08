@@ -15,6 +15,7 @@
 #include <LLGL/BufferFlags.h>
 #include <LLGL/Report.h>
 #include "../../DXCommon/ComPtr.h"
+#include "../../DXCommon/DXShaderReflection.h"
 #include <vector>
 #include <string>
 #include <d3d11.h>
@@ -24,18 +25,11 @@ namespace LLGL
 {
 
 
-struct D3D11ConstantReflection
-{
-    std::string name;   // Name of the constant buffer field.
-    UINT        offset; // Offset (in bytes) within the constant buffer.
-    UINT        size;   // Size (in bytes) of this uniform.
-};
-
 struct D3D11ConstantBufferReflection
 {
-    UINT                                    slot;
-    UINT                                    size;
-    std::vector<D3D11ConstantReflection>    fields;
+    UINT                                slot    = 0;
+    UINT                                size    = 0;
+    std::vector<DXConstantReflection>   fields;
 };
 
 class D3D11Shader : public Shader
@@ -77,14 +71,19 @@ class D3D11Shader : public Shader
             ID3DBlob*               blob,
             std::size_t             numStreamOutputAttribs  = 0,
             const VertexAttribute*  streamOutputAttribs     = nullptr,
-            UINT                    rasterizedStream        = D3D11_SO_NO_RASTERIZED_STREAM,
+            UINT                    rasterizedStream        = 0,
             ID3D11ClassLinkage*     classLinkage            = nullptr
         );
 
     protected:
 
         bool BuildShader(ID3D11Device* device, const ShaderDescriptor& shaderDesc);
-        bool BuildProxyGeometryShader(ID3D11Device* device, const ShaderDescriptor& shaderDesc, ComPtr<ID3D11GeometryShader>& outProxyGeomtryShader);
+        bool BuildProxyGeometryShader(
+            ID3D11Device*                   device,
+            const ShaderDescriptor&         shaderDesc,
+            ComPtr<ID3D11GeometryShader>&   outProxyGeometryShader,
+            UINT                            rasterizedStream        = 0
+        );
 
     private:
 

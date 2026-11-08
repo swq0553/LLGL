@@ -17,26 +17,9 @@ namespace LLGL
 {
 
 
-VkResult VKSubmitCommandBuffer(VkQueue commandQueue, VkCommandBuffer commandBuffer, VkFence fence)
-{
-    VkSubmitInfo submitInfo;
-    {
-        submitInfo.sType                = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        submitInfo.pNext                = nullptr;
-        submitInfo.waitSemaphoreCount   = 0;
-        submitInfo.pWaitSemaphores      = nullptr;
-        submitInfo.pWaitDstStageMask    = 0;
-        submitInfo.commandBufferCount   = 1;
-        submitInfo.pCommandBuffers      = &commandBuffer;
-        submitInfo.signalSemaphoreCount = 0;
-        submitInfo.pSignalSemaphores    = nullptr;
-    }
-    return vkQueueSubmit(commandQueue, 1, &submitInfo, fence);
-}
-
-VKCommandQueue::VKCommandQueue(VkDevice device, VkQueue queue) :
-    device_ { device },
-    native_ { queue  }
+VKCommandQueue::VKCommandQueue(VkDevice device, const VKSharedCommandQueueSPtr& sharedCmdQueue) :
+    device_         { device         },
+    sharedCmdQueue_ { sharedCmdQueue }
 {
 }
 
@@ -47,11 +30,7 @@ void VKCommandQueue::Submit(CommandBuffer& commandBuffer)
     auto& commandBufferVK = LLGL_CAST(VKCommandBuffer&, commandBuffer);
     if (!commandBufferVK.IsImmediateCmdBuffer())
     {
-        VkResult result = VKSubmitCommandBuffer(
-            native_,
-            commandBufferVK.GetVkCommandBuffer(),
-            commandBufferVK.GetQueueSubmitFenceAndFlush()
-        );
+        VkResult result = commandBufferVK.SubmitToQueue(*sharedCmdQueue_);
         VKThrowIfFailed(result, "failed to submit command buffer to Vulkan graphics queue");
     }
 }
@@ -66,6 +45,17 @@ bool VKCommandQueue::QueryResult(
     std::size_t     dataSize)
 {
     auto& queryHeapVK = LLGL_CAST(VKQueryHeap&, queryHeap);
+
+    /*
+    We currently simply flush the whole queue for query readbacks,
+    because resetting query pools are encoded in a concurrent VkCommandBuffer.
+    A reset from a previous native command encoding could have become stale,
+    which lets QueryResult() return too early before the updated query results are ready.
+    This function needs at least to wait for the VkFence of the VkCommandBuffer that encoded the reset of the specified input query.
+    This could potentially point to a multitude of command buffers that issued queries, which would require complex book keeping.
+    Since GPU readbacks from queries are expected to be slow anyway, we simply flush the entire queue.
+    */
+    sharedCmdQueue_->WaitIdle();
 
     /* Store result directly into output parameter */
     VkResult stateResult = GetQueryResults(queryHeapVK, firstQuery, numQueries, data, dataSize);
@@ -102,9 +92,10 @@ bool VKCommandBuffer::QueryPipelineStatisticsResult(QueryHeap& queryHeap, QueryP
 
 void VKCommandQueue::Submit(Fence& fence)
 {
+    sharedCmdQueue_->isIdle = false;
     auto& fenceVK = LLGL_CAST(VKFence&, fence);
     fenceVK.Reset(device_);
-    vkQueueSubmit(native_, 0, nullptr, fenceVK.GetVkFence());
+    vkQueueSubmit(sharedCmdQueue_->native, 0, nullptr, fenceVK.GetVkFence());
 }
 
 bool VKCommandQueue::WaitFence(Fence& fence, std::uint64_t timeout)
@@ -115,7 +106,7 @@ bool VKCommandQueue::WaitFence(Fence& fence, std::uint64_t timeout)
 
 void VKCommandQueue::WaitIdle()
 {
-    vkQueueWaitIdle(native_);
+    sharedCmdQueue_->WaitIdle();
 }
 
 
@@ -149,14 +140,18 @@ VkResult VKCommandQueue::GetQueryResults(
         return VK_ERROR_VALIDATION_FAILED_EXT;
 
     /* NOTE: vkGetQueryPoolResults() seems to disregard 32-bit requests and corrupts memory, so we always query with VK_QUERY_RESULT_64_BIT */
-    if (queryHeapVK.GetType() == QueryType::TimeElapsed || stride != sizeof(std::uint64_t))
+    const QueryType queryType = queryHeapVK.GetType();
+    if (queryHeapVK.IsAliased())
     {
-        /* Query results individually */
+        /* Query results individually and potentially from aliased queries */
         auto dataByteAligned = static_cast<std::uint8_t*>(data);
 
         for (std::uint32_t query = firstQuery; query < firstQuery + numQueries; ++query)
         {
-            auto stateResult = GetQuerySingleResult(queryHeapVK, query, dataByteAligned, stride, flags);
+            const VKQueryAlias* queryAlias = queryHeapVK.GetAlias(query);
+            VkResult stateResult = (queryAlias != nullptr)
+                ? GetQuerySingleResult(queryType, *(queryAlias->queryHeap), queryAlias->queryIndex, dataByteAligned, stride, flags)
+                : GetQuerySingleResult(queryType, queryHeapVK, query, dataByteAligned, stride, flags);
             if (stateResult != VK_SUCCESS)
                 return stateResult;
             dataByteAligned += stride;
@@ -166,8 +161,29 @@ VkResult VKCommandQueue::GetQueryResults(
     }
     else
     {
-        /* Get query data directly as batch */
-        return GetQueryBatchedResults(queryHeapVK, firstQuery, numQueries, data, dataSize, stride, flags);
+        if (stride != sizeof(std::uint64_t)                     ||
+            queryType == QueryType::TimeElapsed                 ||
+            queryType == QueryType::StreamOutPrimitivesWritten  ||
+            queryType == QueryType::StreamOutOverflow)
+        {
+            /* Query results individually */
+            auto dataByteAligned = static_cast<std::uint8_t*>(data);
+
+            for (std::uint32_t query = firstQuery; query < firstQuery + numQueries; ++query)
+            {
+                VkResult stateResult = GetQuerySingleResult(queryType, queryHeapVK, query, dataByteAligned, stride, flags);
+                if (stateResult != VK_SUCCESS)
+                    return stateResult;
+                dataByteAligned += stride;
+            }
+
+            return VK_SUCCESS;
+        }
+        else
+        {
+            /* Get query data directly as batch */
+            return GetQueryBatchedResults(queryHeapVK, firstQuery, numQueries, data, dataSize, stride, flags);
+        }
     }
 }
 
@@ -194,6 +210,7 @@ VkResult VKCommandQueue::GetQueryBatchedResults(
 }
 
 VkResult VKCommandQueue::GetQuerySingleResult(
+    QueryType           parentQueryType,
     VKQueryHeap&        queryHeapVK,
     std::uint32_t       query,
     void*               data,
@@ -204,55 +221,120 @@ VkResult VKCommandQueue::GetQuerySingleResult(
 
     query *= queryHeapVK.GetGroupSize();
 
-    if (queryHeapVK.GetType() == QueryType::TimeElapsed)
-    {
-        /* Query start and end timestamps */
-        std::uint64_t timestamps[2];
-        result = vkGetQueryPoolResults(
-            device_,
-            queryHeapVK.GetVkQueryPool(),
-            query,
-            queryHeapVK.GetGroupSize(),
-            sizeof(timestamps),
-            timestamps,
-            sizeof(timestamps[0]),
-            VK_QUERY_RESULT_64_BIT
-        );
-
-        if (result == VK_SUCCESS)
+    auto WriteUint64Output = [data, stride](std::uint64_t value) -> void
         {
-            /* Store difference between timestamps in output buffer */
-            const auto elapsedTime = (timestamps[1] - timestamps[0]);
             if (stride == sizeof(std::uint64_t))
             {
                 auto dst = static_cast<std::uint64_t*>(data);
-                dst[0] = elapsedTime;
+                dst[0] = value;
             }
             else
             {
                 auto dst = static_cast<std::uint32_t*>(data);
-                dst[0] = static_cast<std::uint32_t>(elapsedTime);
+                dst[0] = static_cast<std::uint32_t>(value);
+            }
+        };
+
+    switch (parentQueryType)
+    {
+        case QueryType::TimeElapsed:
+        {
+            /* Query start and end timestamps */
+            std::uint64_t timestamps[2];
+            result = vkGetQueryPoolResults(
+                device_,
+                queryHeapVK.GetVkQueryPool(),
+                query,
+                queryHeapVK.GetGroupSize(),
+                sizeof(timestamps),
+                timestamps,
+                sizeof(timestamps[0]),
+                VK_QUERY_RESULT_64_BIT
+            );
+
+            if (result == VK_SUCCESS)
+            {
+                /* Store difference between timestamps in output buffer */
+                const std::uint64_t elapsedTime = (timestamps[1] - timestamps[0]);
+                WriteUint64Output(elapsedTime);
             }
         }
-    }
-    else
-    {
-        /* NOTE: vkGetQueryPoolResults() seems to disregard 32-bit requests and corrupts memory, so we always query with 64-bit values */
-        std::uint64_t intermediateResult = 0;
-        result = vkGetQueryPoolResults(
-            device_,
-            queryHeapVK.GetVkQueryPool(),
-            query,
-            1,
-            static_cast<std::size_t>(intermediateResult),
-            &intermediateResult,
-            0,
-            flags
-        );
-        reinterpret_cast<std::uint32_t*>(data)[0] = static_cast<std::uint32_t>(intermediateResult);
+        break;
+
+        case QueryType::StreamOutPrimitivesWritten:
+        case QueryType::StreamOutOverflow:
+        {
+            struct XfbStreamResult
+            {
+                std::uint64_t numPrimitivesWritten;
+                std::uint64_t numPrimitivesGenerated;
+            };
+            XfbStreamResult xfbStreamResult;
+
+            result = vkGetQueryPoolResults(
+                device_,
+                queryHeapVK.GetVkQueryPool(),
+                query,
+                queryHeapVK.GetGroupSize(),
+                sizeof(xfbStreamResult),
+                &xfbStreamResult,
+                sizeof(xfbStreamResult),
+                VK_QUERY_RESULT_64_BIT
+            );
+
+            if (result == VK_SUCCESS)
+            {
+                if (parentQueryType == QueryType::StreamOutOverflow)
+                    WriteUint64Output(xfbStreamResult.numPrimitivesWritten != xfbStreamResult.numPrimitivesGenerated ? 1 : 0);
+                else
+                    WriteUint64Output(xfbStreamResult.numPrimitivesWritten);
+            }
+        }
+        break;
+
+        default:
+        {
+            /* NOTE: vkGetQueryPoolResults() seems to disregard 32-bit requests and corrupts memory, so we always query with 64-bit values */
+            std::uint64_t intermediateResult = 0;
+            result = vkGetQueryPoolResults(
+                device_,
+                queryHeapVK.GetVkQueryPool(),
+                query,
+                1,
+                sizeof(intermediateResult),
+                &intermediateResult,
+                0,
+                flags
+            );
+            WriteUint64Output(intermediateResult);
+        }
     }
 
     return result;
+}
+
+
+/*
+ * VKSharedCommandQueue structure
+ */
+
+VkResult VKSharedCommandQueue::WaitIdle()
+{
+    /* Cache idle state to avoid subsequent calls when used to readback query results */
+    VkResult result = VK_SUCCESS;
+    if (!isIdle)
+    {
+        result = vkQueueWaitIdle(native);
+        if (result== VK_SUCCESS)
+            isIdle = true;
+    }
+    return result;
+}
+
+VkResult VKSharedCommandQueue::Submit(const VkSubmitInfo& submitInfo, VkFence fence)
+{
+    isIdle = false;
+    return vkQueueSubmit(native, 1, &submitInfo, fence);
 }
 
 

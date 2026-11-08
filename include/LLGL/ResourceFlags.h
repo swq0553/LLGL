@@ -77,6 +77,8 @@ struct BindFlags
         /**
         \brief The resource can be used to bind a stream of indices.
         \remarks This can only be used for Buffer resources.
+        \note On WebGL 2, this must \e not be combined with any other bind flags except for CopySrc and CopyDst.
+        This means WebGL 2 does not support sharing vertex with index data in the same buffer.
         \see CommandBuffer::SetIndexBuffer
         */
         IndexBuffer             = (1 << 1),
@@ -168,6 +170,7 @@ struct BindFlags
         \brief Specifies a resource is bound as texel buffer.
         \remarks This is only used by the Vulkan backend at the moment to workaround the restriction
         that resource heaps need to know their exact descriptor types at creation time.
+        It is not necessary to create buffers with this flag, only the pipeline layout needs to know about this flag.
         \see PipelineLayoutDescriptor::heapBindings
         \note Only required for: Vulkan
         \todo This is a workaround for the Vulkan backend and should eventually be removed.

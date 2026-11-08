@@ -74,9 +74,10 @@ class VKRenderSystem final : public RenderSystem
     private:
 
         void QuerySupportedInstanceExtensions();
+        bool AppendUserInstanceExtensions(const RendererConfigurationVulkan* config);
         void CreateInstance(const RendererConfigurationVulkan* config);
-        void CreateDebugReportCallback();
-        bool PickPhysicalDevice(long preferredDeviceFlags, VkPhysicalDevice customPhysicalDevice = VK_NULL_HANDLE);
+        void CreateDebugMessenger();
+        bool PickPhysicalDevice(const RendererConfigurationVulkan* config, long preferredDeviceFlags, VkPhysicalDevice customPhysicalDevice = VK_NULL_HANDLE);
         void CreateLogicalDevice(VkDevice customLogicalDevice = VK_NULL_HANDLE);
 
         bool IsLayerRequired(const char* name, const RendererConfigurationVulkan* config) const;
@@ -101,6 +102,11 @@ class VKRenderSystem final : public RenderSystem
         VkCommandBuffer AllocCommandBuffer(bool begin = true);
         void FlushCommandBuffer(VkCommandBuffer commandBuffer);
 
+        void SyncGPU();
+
+        template <typename TSub, typename TBase>
+        void SyncGPUAndReleaseResource(HWObjectContainer<TSub>& container, TBase& resource);
+
     private:
 
         /* ----- Common objects ----- */
@@ -115,7 +121,7 @@ class VKRenderSystem final : public RenderSystem
 
         bool                                    isDebugLayerEnabled_    = false;
         bool                                    isBreakOnErrorEnabled_  = false;
-        VKPtr<VkDebugReportCallbackEXT>         debugReportCallback_;
+        VKPtr<VkDebugUtilsMessengerEXT>         debugMessenger_;
 
         std::unique_ptr<VKDeviceMemoryManager>  deviceMemoryMngr_;
 

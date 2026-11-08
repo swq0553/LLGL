@@ -253,7 +253,7 @@ class UnorderedUniquePtrVector
                     container_[payload->index].payload() = *payload;
                 }
 
-                /* Remove last element in container; it's either input object or the one moved that object's location */
+                /* Remove last element in container; it's either input object or the one moved to that object's location */
                 container_.pop_back();
             }
         }
@@ -266,6 +266,20 @@ class UnorderedUniquePtrVector
         bool empty() const
         {
             return container_.empty();
+        }
+
+        template <typename TBase>
+        bool contains(const TBase* object) const
+        {
+            auto it = std::find_if(
+                std::begin(container_),
+                std::end(container_),
+                [object](const IndexedUniquePtr<T>& entry) -> bool
+                {
+                    return (entry.get() == object);
+                }
+            );
+            return (it != std::end(container_));
         }
 
     public:
@@ -341,6 +355,12 @@ class UnorderedUniquePtrSet
         bool empty() const
         {
             return container_.empty();
+        }
+
+        template <typename TBase>
+        bool contains(const TBase* object) const
+        {
+            return (container_.find(object) != container_.end());
         }
 
     public:

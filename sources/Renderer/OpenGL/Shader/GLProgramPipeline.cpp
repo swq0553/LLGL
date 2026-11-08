@@ -43,13 +43,12 @@ static GLuint GLCreateProgramPipeline()
 }
 
 GLProgramPipeline::GLProgramPipeline(
-    std::size_t             numShaders,
-    Shader* const*          shaders,
+    ArrayView<Shader*>      shaders,
     GLShader::Permutation   permutation)
 :
     GLShaderPipeline { GLCreateProgramPipeline() }
 {
-    UseProgramStages(numShaders, reinterpret_cast<GLSeparableShader* const*>(shaders), permutation);
+    UseProgramStages(shaders, permutation);
 }
 
 GLProgramPipeline::~GLProgramPipeline()
@@ -106,7 +105,7 @@ void GLProgramPipeline::QueryTexBufferNames(std::set<std::string>& outSamplerBuf
     outSamplerBufferNames.clear();
     outImageBufferNames.clear();
     for_range(i, GetSignature().GetNumShaders())
-        GLShaderProgram::QueryTexBufferNames(separableShaders_[i]->GetID(), outSamplerBufferNames, outImageBufferNames);
+        GLShaderProgram::QueryTexBufferNames(separableShaders_[i]->GetID(GLShader::PermutationDefault), outSamplerBufferNames, outImageBufferNames);
 }
 
 
@@ -114,19 +113,16 @@ void GLProgramPipeline::QueryTexBufferNames(std::set<std::string>& outSamplerBuf
  * ======= Private: =======
  */
 
-void GLProgramPipeline::UseProgramStages(
-    std::size_t                 numShaders,
-    GLSeparableShader* const*   shaders,
-    GLShader::Permutation       permutation)
+void GLProgramPipeline::UseProgramStages(ArrayView<Shader*> shaders, GLShader::Permutation permutation)
 {
     /* Find last shader in pipeline that transforms gl_Position if such permutation is requested */
     const GLShader* shaderWithFlippedYPosition = nullptr;
     if (permutation == GLShader::PermutationFlippedYPosition)
-        shaderWithFlippedYPosition = GLPipelineSignature::FindFinalGLPositionShader(numShaders, reinterpret_cast<const Shader* const*>(shaders));
+        shaderWithFlippedYPosition = GLPipelineSignature::FindFinalGLPositionShader(ArrayView<const Shader*>{ shaders.data(), shaders.size() });
 
-    for_range(i, numShaders)
+    for_range(i, shaders.size())
     {
-        GLSeparableShader* separableShader = shaders[i];
+        GLSeparableShader* separableShader = static_cast<GLSeparableShader*>(shaders[i]);
         LLGL_ASSERT_PTR(separableShader);
         if (GLbitfield stage = ToGLShaderStageBit(separableShader->GetType()))
         {
@@ -136,12 +132,12 @@ void GLProgramPipeline::UseProgramStages(
                     ? GLShader::PermutationFlippedYPosition
                     : GLShader::PermutationDefault
             );
-            glUseProgramStages(GetID(), stage, separableShader->GetID(permutationForShader));
+            glUseProgramStages(GetID(), stage, separableShader->GetIDOrDefault(permutationForShader));
             separableShaders_[i] = separableShader;
         }
     }
 
-    BuildSignature(numShaders, reinterpret_cast<const Shader* const*>(shaders), permutation);
+    BuildSignature(ArrayView<const Shader*>{ shaders.data(), shaders.size() }, permutation);
 }
 
 #else // LLGL_GLEXT_SEPARATE_SHADER_OBJECTS
@@ -167,6 +163,11 @@ void GLProgramPipeline::BindResourceSlots(const GLShaderBindingLayout& bindingLa
 }
 
 void GLProgramPipeline::QueryInfoLogs(Report& report)
+{
+    // dummy
+}
+
+void GLProgramPipeline::QueryTexBufferNames(std::set<std::string>& outSamplerBufferNames, std::set<std::string>& outImageBufferNames) const
 {
     // dummy
 }

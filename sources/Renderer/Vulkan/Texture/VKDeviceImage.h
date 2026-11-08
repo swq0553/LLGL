@@ -41,7 +41,12 @@ class VKDeviceImage
         VKDeviceImage(const VKDeviceImage&) = delete;
         VKDeviceImage& operator = (const VKDeviceImage&) = delete;
 
-        void AllocateMemoryRegion(VKDeviceMemoryManager& deviceMemoryMngr);
+        /*
+        Allocates the backing device memory for this image.
+        When 'preferLazilyAllocated' is true (transient attachments), memory that the implementation only backs
+        on demand is requested first, falling back to regular device-local memory where no such type exists.
+        */
+        void AllocateMemoryRegion(VKDeviceMemoryManager& deviceMemoryMngr, bool preferLazilyAllocated = false);
         void ReleaseMemoryRegion(VKDeviceMemoryManager& deviceMemoryMngr);
 
         void BindMemoryRegion(VkDevice device, VKDeviceMemoryRegion* memoryRegion);
@@ -57,6 +62,10 @@ class VKDeviceImage
             VkSampleCountFlagBits   sampleCountBits,
             VkImageUsageFlags       usageFlags
         );
+
+        // Takes ownership of an externally-owned VkImage. The image is held as a weak reference;
+        // this VKDeviceImage will not destroy it.
+        void TakeVkImageOwnership(VkImage externalImage, VkImageLayout initialLayout);
 
         void ReleaseVkImage();
 

@@ -6,6 +6,7 @@
  */
 
 #include "MTTypes.h"
+#include "MTFeatureSet.h"
 #include "../../Core/Exception.h"
 
 
@@ -16,17 +17,11 @@ namespace MTTypes
 {
 
 
-[[noreturn]]
-void MapFailed(const char* typeName, const char* mtlTypeName)
-{
-    LLGL_TRAP("failed to map <LLGL::%s> to <%s> Metal parameter", typeName, mtlTypeName);
-}
+#define LLGL_TRAP_MT_MAP(TYPE, VALUE, MTLTYPE) \
+    LLGL_TRAP("failed to map LLGL::%s(%d) to %s Metal parameter", #TYPE, static_cast<int>(VALUE), #MTLTYPE)
 
-[[noreturn]]
-void UnmapFailed(const char* typeName, const char* mtlTypeName)
-{
-    LLGL_TRAP("failed to unmap <LLGL::%s> from <%s> Metal parameter", typeName, mtlTypeName);
-}
+#define LLGL_TRAP_MT_UNMAP(TYPE, VALUE, MTLTYPE) \
+    LLGL_TRAP("failed to unmap LLGL::%s(%d) from %s Metal parameter", #TYPE, static_cast<int>(VALUE), #MTLTYPE)
 
 MTLDataType ToMTLDataType(const DataType dataType)
 {
@@ -47,10 +42,10 @@ MTLDataType ToMTLDataType(const DataType dataType)
         case DataType::Float32:     return MTLDataTypeFloat;
         case DataType::Float64:     break;
     }
-    MapFailed("DataType", "MTLDataType");
+    LLGL_TRAP_MT_MAP(DataType, dataType, MTLDataType);
 }
 
-MTLPixelFormat ToMTLPixelFormat(const Format format)
+MTLPixelFormat ToMTLPixelFormatOrDefault(const Format format)
 {
     switch (format)
     {
@@ -145,24 +140,36 @@ MTLPixelFormat ToMTLPixelFormat(const Format format)
         case Format::RGB10A2UInt:       return MTLPixelFormatRGB10A2Uint;
         case Format::RG11B10Float:      return MTLPixelFormatRG11B10Float;
         case Format::RGB9E5Float:       return MTLPixelFormatRGB9E5Float;
-        case Format::BGR5A1UNorm:       return MTLPixelFormatBGR5A1Unorm;
+        case Format::BGR5A1UNorm:
+            #if LLGL_OS_IOS || (defined(__MAC_11_0) && __MAC_OS_X_VERSION_MAX_ALLOWED >= __MAC_11_0)
+            if (@available(macOS 11.0, iOS 8.0, *))
+                return MTLPixelFormatBGR5A1Unorm;
+            #endif
+            break;
+        case Format::B5G6R5UNorm:
+            #if LLGL_OS_IOS || (defined(__MAC_11_0) && __MAC_OS_X_VERSION_MAX_ALLOWED >= __MAC_11_0)
+            if (@available(macOS 11.0, iOS 8.0, *))
+                return MTLPixelFormatB5G6R5Unorm;
+            #endif
+            break;
+        case Format::BGRA4UNorm:        break; // MTLPixelFormatABGR4Unorm has a different component order
 
         /* --- Depth-stencil formats --- */
-        #ifdef LLGL_OS_IOS
+        #if LLGL_OS_IOS
         case Format::D16UNorm:          return MTLPixelFormatDepth32Float;
         #else
         case Format::D16UNorm:          return MTLPixelFormatDepth16Unorm;
         #endif
         case Format::D32Float:          return MTLPixelFormatDepth32Float;
-        #ifdef LLGL_OS_IOS
+        #if LLGL_OS_IOS
         case Format::D24UNormS8UInt:    return MTLPixelFormatDepth32Float_Stencil8;
         #else
-        case Format::D24UNormS8UInt:    return MTLPixelFormatDepth24Unorm_Stencil8;
+        case Format::D24UNormS8UInt:    return (MTFormatCapabilities::Get().hasD24S8UIntFormat ? MTLPixelFormatDepth24Unorm_Stencil8 : MTLPixelFormatDepth32Float_Stencil8);
         #endif
         case Format::D32FloatS8X24UInt: return MTLPixelFormatDepth32Float_Stencil8;
 
         /* --- Block compression (BC) formats --- */
-        #ifndef LLGL_OS_IOS
+        #if !LLGL_OS_IOS
         case Format::BC1UNorm:          return MTLPixelFormatBC1_RGBA;
         case Format::BC1UNorm_sRGB:     return MTLPixelFormatBC1_RGBA_sRGB;
         case Format::BC2UNorm:          return MTLPixelFormatBC2_RGBA;
@@ -173,10 +180,14 @@ MTLPixelFormat ToMTLPixelFormat(const Format format)
         case Format::BC4SNorm:          return MTLPixelFormatBC4_RSnorm;
         case Format::BC5UNorm:          return MTLPixelFormatBC5_RGUnorm;
         case Format::BC5SNorm:          return MTLPixelFormatBC5_RGSnorm;
+        case Format::BC6HUFloat:        return MTLPixelFormatBC6H_RGBUfloat;
+        case Format::BC6HSFloat:        return MTLPixelFormatBC6H_RGBFloat;
+        case Format::BC7UNorm:          return MTLPixelFormatBC7_RGBAUnorm;
+        case Format::BC7UNorm_sRGB:     return MTLPixelFormatBC7_RGBAUnorm_sRGB;
         #endif
 
         /* --- Advanced scalable texture compression (ASTC) formats --- */
-        #ifdef LLGL_OS_IOS //TODO: available in macOS 11
+        #if LLGL_OS_IOS || (defined(__MAC_11_0) && __MAC_OS_X_VERSION_MAX_ALLOWED >= __MAC_11_0)
         case Format::ASTC4x4:           return MTLPixelFormatASTC_4x4_LDR;
         case Format::ASTC4x4_sRGB:      return MTLPixelFormatASTC_4x4_sRGB;
         case Format::ASTC5x4:           return MTLPixelFormatASTC_5x4_LDR;
@@ -214,10 +225,27 @@ MTLPixelFormat ToMTLPixelFormat(const Format format)
 
         default:                        break;
     }
-    MapFailed("Format", "MTLPixelFormat");
+    return MTLPixelFormatInvalid;
 }
 
-MTLVertexFormat ToMTLVertexFormat(const Format format)
+MTLPixelFormat ToMTLPixelFormat(const Format format)
+{
+    if (format == Format::Undefined)
+    {
+        /* Return explicitly requested invalid format */
+        return MTLPixelFormatInvalid;
+    }
+    else
+    {
+        /* Trap format that cannot be mapped */
+        MTLPixelFormat outFormat = ToMTLPixelFormatOrDefault(format);
+        if (outFormat != MTLPixelFormatInvalid)
+            return outFormat;
+        LLGL_TRAP_MT_MAP(Format, format, MTLPixelFormat);
+    }
+}
+
+MTLVertexFormat ToMTLVertexFormatOrDefault(const Format format)
 {
     switch (format)
     {
@@ -287,7 +315,15 @@ MTLVertexFormat ToMTLVertexFormat(const Format format)
 
         default:                    break;
     }
-    MapFailed("Format", "MTLVertexFormat");
+    return MTLVertexFormatInvalid;
+}
+
+MTLVertexFormat ToMTLVertexFormat(const Format format)
+{
+    MTLVertexFormat outFormat = ToMTLVertexFormatOrDefault(format);
+    if (outFormat != MTLVertexFormatInvalid)
+        return outFormat;
+    LLGL_TRAP_MT_MAP(Format, format, MTLVertexFormat);
 }
 
 MTLTessellationControlPointIndexType ToMTLPatchIndexType(const Format format)
@@ -299,7 +335,7 @@ MTLTessellationControlPointIndexType ToMTLPatchIndexType(const Format format)
         case Format::R32UInt:   return MTLTessellationControlPointIndexTypeUInt32;
         default:                break;
     }
-    MapFailed("Format", "MTLTessellationControlPointIndexType");
+    LLGL_TRAP_MT_MAP(Format, format, MTLTessellationControlPointIndexType);
 }
 
 MTLTessellationPartitionMode ToMTLPartitionMode(const TessellationPartition partitionMode)
@@ -312,7 +348,7 @@ MTLTessellationPartitionMode ToMTLPartitionMode(const TessellationPartition part
         case TessellationPartition::FractionalOdd:  return MTLTessellationPartitionModeFractionalOdd;
         case TessellationPartition::FractionalEven: return MTLTessellationPartitionModeFractionalEven;
     }
-    MapFailed("TessellationPartition", "MTLTessellationPartitionMode");
+    LLGL_TRAP_MT_MAP(TessellationPartition, partitionMode, MTLTessellationPartitionMode);
 }
 
 MTLTextureType ToMTLTextureType(const TextureType textureType)
@@ -328,13 +364,13 @@ MTLTextureType ToMTLTextureType(const TextureType textureType)
         case TextureType::TextureCubeArray: return MTLTextureTypeCubeArray;
         case TextureType::Texture2DMS:      return MTLTextureType2DMultisample;
         case TextureType::Texture2DMSArray:
-            #ifndef LLGL_OS_IOS
+            #if !LLGL_OS_IOS
             if (@available(macOS 10.14, *))
                 return MTLTextureType2DMultisampleArray;
             #endif
             break;
     }
-    MapFailed("TextureType", "MTLTextureType");
+    LLGL_TRAP_MT_MAP(TextureType, textureType, MTLTextureType);
 }
 
 MTLPrimitiveType ToMTLPrimitiveType(const PrimitiveTopology primitiveTopology)
@@ -351,7 +387,7 @@ MTLPrimitiveType ToMTLPrimitiveType(const PrimitiveTopology primitiveTopology)
                 return MTLPrimitiveTypePoint;
             break;
     }
-    MapFailed("PrimitiveTopology", "MTLPrimitiveType");
+    LLGL_TRAP_MT_MAP(PrimitiveTopology, primitiveTopology, MTLPrimitiveType);
 }
 
 MTLPrimitiveTopologyClass ToMTLPrimitiveTopologyClass(const PrimitiveTopology primitiveTopology)
@@ -368,7 +404,7 @@ MTLPrimitiveTopologyClass ToMTLPrimitiveTopologyClass(const PrimitiveTopology pr
                 return MTLPrimitiveTopologyClassUnspecified;
             break;
     }
-    MapFailed("PrimitiveTopology", "MTLPrimitiveTopologyClass");
+    LLGL_TRAP_MT_MAP(PrimitiveTopology, primitiveTopology, MTLPrimitiveTopologyClass);
 }
 
 MTLCullMode ToMTLCullMode(const CullMode cullMode)
@@ -379,7 +415,7 @@ MTLCullMode ToMTLCullMode(const CullMode cullMode)
         case CullMode::Front:       return MTLCullModeFront;
         case CullMode::Back:        return MTLCullModeBack;
     }
-    MapFailed("CullMode", "MTLCullMode");
+    LLGL_TRAP_MT_MAP(CullMode, cullMode, MTLCullMode);
 }
 
 MTLCompareFunction ToMTLCompareFunction(const CompareOp compareOp)
@@ -395,7 +431,7 @@ MTLCompareFunction ToMTLCompareFunction(const CompareOp compareOp)
         case CompareOp::GreaterEqual:   return MTLCompareFunctionGreaterEqual;
         case CompareOp::AlwaysPass:     return MTLCompareFunctionAlways;
     }
-    MapFailed("CompareOp", "MTLCompareFunction");
+    LLGL_TRAP_MT_MAP(CompareOp, compareOp, MTLCompareFunction);
 }
 
 MTLSamplerAddressMode ToMTLSamplerAddressMode(const SamplerAddressMode addressMode)
@@ -405,7 +441,7 @@ MTLSamplerAddressMode ToMTLSamplerAddressMode(const SamplerAddressMode addressMo
         case SamplerAddressMode::Repeat:        return MTLSamplerAddressModeRepeat;
         case SamplerAddressMode::Mirror:        return MTLSamplerAddressModeMirrorRepeat;
         case SamplerAddressMode::Clamp:         return MTLSamplerAddressModeClampToEdge;
-        #ifndef LLGL_OS_IOS
+        #if !LLGL_OS_IOS
         case SamplerAddressMode::Border:        return MTLSamplerAddressModeClampToBorderColor;
         case SamplerAddressMode::MirrorOnce:    return MTLSamplerAddressModeMirrorClampToEdge;
         #else
@@ -413,7 +449,7 @@ MTLSamplerAddressMode ToMTLSamplerAddressMode(const SamplerAddressMode addressMo
         case SamplerAddressMode::MirrorOnce:    break;
         #endif // /LLGL_OS_IOS
     }
-    MapFailed("SamplerAddressMode", "MTLSamplerAddressMode");
+    LLGL_TRAP_MT_MAP(SamplerAddressMode, addressMode, MTLSamplerAddressMode);
 }
 
 MTLSamplerMinMagFilter ToMTLSamplerMinMagFilter(const SamplerFilter filter)
@@ -423,7 +459,7 @@ MTLSamplerMinMagFilter ToMTLSamplerMinMagFilter(const SamplerFilter filter)
         case SamplerFilter::Nearest:    return MTLSamplerMinMagFilterNearest;
         case SamplerFilter::Linear:     return MTLSamplerMinMagFilterLinear;
     }
-    MapFailed("SamplerFilter", "MTLSamplerMinMagFilter");
+    LLGL_TRAP_MT_MAP(SamplerFilter, filter, MTLSamplerMinMagFilter);
 }
 
 MTLSamplerMipFilter ToMTLSamplerMipFilter(const SamplerFilter filter)
@@ -433,7 +469,7 @@ MTLSamplerMipFilter ToMTLSamplerMipFilter(const SamplerFilter filter)
         case SamplerFilter::Nearest:    return MTLSamplerMipFilterNearest;
         case SamplerFilter::Linear:     return MTLSamplerMipFilterLinear;
     }
-    MapFailed("SamplerFilter", "MTLSamplerMipFilter");
+    LLGL_TRAP_MT_MAP(SamplerFilter, filter, MTLSamplerMipFilter);
 }
 
 MTLTriangleFillMode ToMTLTriangleFillMode (const PolygonMode polygonMode)
@@ -444,7 +480,7 @@ MTLTriangleFillMode ToMTLTriangleFillMode (const PolygonMode polygonMode)
         case PolygonMode::Wireframe:    return MTLTriangleFillModeLines;
         case PolygonMode::Points:       break;
     }
-    MapFailed("PolygonMode", "MTLTriangleFillMode");
+    LLGL_TRAP_MT_MAP(PolygonMode, polygonMode, MTLTriangleFillMode);
 }
 
 MTLStencilOperation ToMTLStencilOperation(const StencilOp stencilOp)
@@ -460,7 +496,7 @@ MTLStencilOperation ToMTLStencilOperation(const StencilOp stencilOp)
         case StencilOp::IncWrap:    return MTLStencilOperationIncrementWrap;
         case StencilOp::DecWrap:    return MTLStencilOperationDecrementWrap;
     }
-    MapFailed("StencilOp", "MTLStencilOperation");
+    LLGL_TRAP_MT_MAP(StencilOp, stencilOp, MTLStencilOperation);
 }
 
 MTLLoadAction ToMTLLoadAction(const AttachmentLoadOp loadOp)
@@ -471,7 +507,7 @@ MTLLoadAction ToMTLLoadAction(const AttachmentLoadOp loadOp)
         case AttachmentLoadOp::Load:        return MTLLoadActionLoad;
         case AttachmentLoadOp::Clear:       return MTLLoadActionClear;
     }
-    MapFailed("AttachmentLoadOp", "MTLLoadAction");
+    LLGL_TRAP_MT_MAP(AttachmentLoadOp, loadOp, MTLLoadAction);
 }
 
 MTLStoreAction ToMTLStoreAction(const AttachmentStoreOp storeOp)
@@ -481,7 +517,7 @@ MTLStoreAction ToMTLStoreAction(const AttachmentStoreOp storeOp)
         case AttachmentStoreOp::Undefined:  return MTLStoreActionDontCare;
         case AttachmentStoreOp::Store:      return MTLStoreActionStore;
     }
-    MapFailed("AttachmentStoreOp", "MTLStoreAction");
+    LLGL_TRAP_MT_MAP(AttachmentStoreOp, storeOp, MTLStoreAction);
 }
 
 MTLBlendOperation ToMTLBlendOperation(const BlendArithmetic blendArithmetic)
@@ -494,7 +530,7 @@ MTLBlendOperation ToMTLBlendOperation(const BlendArithmetic blendArithmetic)
         case BlendArithmetic::Min:          return MTLBlendOperationMin;
         case BlendArithmetic::Max:          return MTLBlendOperationMax;
     }
-    MapFailed("BlendArithmetic", "MTLBlendOperation");
+    LLGL_TRAP_MT_MAP(BlendArithmetic, blendArithmetic, MTLBlendOperation);
 }
 
 MTLBlendFactor ToMTLBlendFactor(const BlendOp blendOp)
@@ -519,7 +555,7 @@ MTLBlendFactor ToMTLBlendFactor(const BlendOp blendOp)
         case BlendOp::Src1Alpha:        return MTLBlendFactorSource1Alpha;
         case BlendOp::InvSrc1Alpha:     return MTLBlendFactorOneMinusSource1Alpha;
     }
-    MapFailed("BlendOp", "MTLBlendFactor");
+    LLGL_TRAP_MT_MAP(BlendOp, blendOp, MTLBlendFactor);
 }
 
 MTLClearColor ToMTLClearColor(const float color[4])
@@ -544,7 +580,7 @@ MTLTextureSwizzle ToMTLTextureSwizzle(const TextureSwizzle swizzle)
         case TextureSwizzle::Blue:  return MTLTextureSwizzleBlue;
         case TextureSwizzle::Alpha: return MTLTextureSwizzleAlpha;
     }
-    MapFailed("TextureSwizzle", "MTLTextureSwizzle");
+    LLGL_TRAP_MT_MAP(TextureSwizzle, swizzle, MTLTextureSwizzle);
 }
 
 Format ToFormat(const MTLPixelFormat pixelFormat)
@@ -613,20 +649,23 @@ Format ToFormat(const MTLPixelFormat pixelFormat)
         case MTLPixelFormatRGB10A2Uint:             return Format::RGB10A2UInt;
         case MTLPixelFormatRG11B10Float:            return Format::RG11B10Float;
         case MTLPixelFormatRGB9E5Float:             return Format::RGB9E5Float;
+        #if LLGL_OS_IOS || (defined(__MAC_11_0) && __MAC_OS_X_VERSION_MAX_ALLOWED >= __MAC_11_0)
         case MTLPixelFormatBGR5A1Unorm:             return Format::BGR5A1UNorm;
+        case MTLPixelFormatB5G6R5Unorm:             return Format::B5G6R5UNorm;
+        #endif
 
         /* --- Depth-stencil formats --- */
-        #ifndef LLGL_OS_IOS
+        #if !LLGL_OS_IOS
         case MTLPixelFormatDepth16Unorm:            return Format::D16UNorm;
         #endif // /LLGL_OS_IOS
         case MTLPixelFormatDepth32Float:            return Format::D32Float;
-        #ifndef LLGL_OS_IOS
+        #if !LLGL_OS_IOS
         case MTLPixelFormatDepth24Unorm_Stencil8:   return Format::D24UNormS8UInt;
         #endif // /LLGL_OS_IOS
         case MTLPixelFormatDepth32Float_Stencil8:   return Format::D32FloatS8X24UInt;
 
         /* --- Compressed color formats --- */
-        #ifndef LLGL_OS_IOS
+        #if !LLGL_OS_IOS
         case MTLPixelFormatBC1_RGBA:                return Format::BC1UNorm;
         case MTLPixelFormatBC1_RGBA_sRGB:           return Format::BC1UNorm_sRGB;
         case MTLPixelFormatBC2_RGBA:                return Format::BC2UNorm;
@@ -637,10 +676,14 @@ Format ToFormat(const MTLPixelFormat pixelFormat)
         case MTLPixelFormatBC4_RSnorm:              return Format::BC4SNorm;
         case MTLPixelFormatBC5_RGUnorm:             return Format::BC5UNorm;
         case MTLPixelFormatBC5_RGSnorm:             return Format::BC5SNorm;
+        case MTLPixelFormatBC6H_RGBUfloat:          return Format::BC6HUFloat;
+        case MTLPixelFormatBC6H_RGBFloat:           return Format::BC6HSFloat;
+        case MTLPixelFormatBC7_RGBAUnorm:           return Format::BC7UNorm;
+        case MTLPixelFormatBC7_RGBAUnorm_sRGB:      return Format::BC7UNorm_sRGB;
         #endif // /LLGL_OS_IOS
 
         /* --- Advanced scalable texture compression (ASTC) formats --- */
-        #ifdef LLGL_OS_IOS //TODO: available in macOS 11
+        #if LLGL_OS_IOS || (defined(__MAC_11_0) && __MAC_OS_X_VERSION_MAX_ALLOWED >= __MAC_11_0)
         case MTLPixelFormatASTC_4x4_LDR:            return Format::ASTC4x4;
         case MTLPixelFormatASTC_4x4_sRGB:           return Format::ASTC4x4_sRGB;
         case MTLPixelFormatASTC_5x4_LDR:            return Format::ASTC5x4;
@@ -677,7 +720,7 @@ Format ToFormat(const MTLPixelFormat pixelFormat)
 
         default:                                    break;
     }
-    UnmapFailed("Format", "MTLPixelFormat");
+    LLGL_TRAP_MT_UNMAP(Format, pixelFormat, MTLPixelFormat);
 }
 
 void Convert(MTLOrigin& dst, const Offset3D& src)

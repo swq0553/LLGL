@@ -15,6 +15,7 @@
 #include "../../Core/Vendor.h"
 #include "../../Core/CoreUtils.h"
 #include "../../Core/Assertion.h"
+#include "../../Core/MacroUtils.h"
 #include "D3DX12/d3dx12.h"
 #include <LLGL/Utils/ForRange.h>
 #include <LLGL/Platform/NativeHandle.h>
@@ -35,6 +36,7 @@
 #include "RenderState/D3D12MeshPSO.h"
 
 #include <LLGL/Backend/Direct3D12/NativeHandle.h>
+#include <LLGL/Utils/TypeNames.h>
 
 
 namespace LLGL
@@ -47,7 +49,8 @@ D3D12RenderSystem::D3D12RenderSystem(const RenderSystemDescriptor& renderSystemD
     if (isDebugDevice)
         EnableDebugLayer();
 
-    if (auto* customNativeHandle = GetRendererNativeHandle<Direct3D12::RenderSystemNativeHandle>(renderSystemDesc))
+    auto* customNativeHandle = GetRendererNativeHandle<Direct3D12::RenderSystemNativeHandle>(renderSystemDesc);
+    if (customNativeHandle != nullptr && customNativeHandle->device != nullptr)
     {
         /* Query all DXGI interfaces from native handle */
         HRESULT hr = QueryDXInterfacesFromNativeHandle(*customNativeHandle, renderSystemDesc.flags);
@@ -55,13 +58,26 @@ D3D12RenderSystem::D3D12RenderSystem(const RenderSystemDescriptor& renderSystemD
     }
     else
     {
+        /*
+        Constraint-driven path: the caller may pass a native handle with device==nullptr to
+        request normal device creation under additional constraints (e.g. the OpenXR binding
+        supplies an adapter LUID and minimum feature level).
+        */
+        LUID preferredLuid{};
+        D3D_FEATURE_LEVEL minFeatureLevel = static_cast<D3D_FEATURE_LEVEL>(0);
+        if (customNativeHandle != nullptr)
+        {
+            preferredLuid   = customNativeHandle->preferredAdapterLuid;
+            minFeatureLevel = customNativeHandle->minFeatureLevel;
+        }
+
         /* Create DXGU factory 1.4, query video adapters, and create D3D12 device */
         CreateFactory(isDebugDevice);
 
-        ComPtr<IDXGIAdapter> preferredAdatper;
-        QueryVideoAdapters(renderSystemDesc.flags, preferredAdatper);
+        ComPtr<IDXGIAdapter> preferredAdapter;
+        QueryVideoAdapters(renderSystemDesc.flags, preferredLuid, preferredAdapter);
 
-        HRESULT hr = CreateDevice(preferredAdatper.Get(), renderSystemDesc.flags);
+        HRESULT hr = CreateDevice(preferredAdapter.Get(), renderSystemDesc.flags, minFeatureLevel);
         DXThrowIfFailed(hr, "failed to create D3D12 device");
     }
 
@@ -74,12 +90,12 @@ D3D12RenderSystem::D3D12RenderSystem(const RenderSystemDescriptor& renderSystemD
 
     /* Create default pipeline layout and command signature pool */
     defaultPipelineLayout_.CreateRootSignature(device_.GetNative(), {});
-    cmdSignatureFactory_.CreateDefaultSignatures(device_.GetNative());
+    cmdSignatureFactory_.CreateDefaultSignatures(device_.GetNative(), deviceCaps_);
 
     stagingBufferPool_.InitializeDevice(device_.GetNative(), 0);
-    D3D12MipGenerator::Get().InitializeDevice(device_.GetNative());
-    D3D12BufferConstantsPool::Get().InitializeDevice(device_.GetNative(), *commandContext_, *commandQueue_, stagingBufferPool_);
-    D3D12BuiltinShaderFactory::Get().CreateBuiltinPSOs(device_.GetNative());
+    sharedDeviceObjects_.mipGenerator.InitializeDevice(device_.GetNative());
+    sharedDeviceObjects_.bufferConstantsPool.InitializeDevice(device_.GetNative(), *commandContext_, *commandQueue_, stagingBufferPool_);
+    sharedDeviceObjects_.builtinShaderFactory.CreateBuiltinPSOs(device_.GetNative());
 }
 
 D3D12RenderSystem::~D3D12RenderSystem()
@@ -96,9 +112,9 @@ D3D12RenderSystem::~D3D12RenderSystem()
     shaders_.clear();
 
     /* Clear resources of singletons */
-    D3D12MipGenerator::Get().Clear();
-    D3D12BufferConstantsPool::Get().Clear();
-    D3D12BuiltinShaderFactory::Get().Clear();
+    sharedDeviceObjects_.mipGenerator.Clear();
+    sharedDeviceObjects_.bufferConstantsPool.Clear();
+    sharedDeviceObjects_.builtinShaderFactory.Clear();
 }
 
 /* ----- Swap-chain ----- */
@@ -144,10 +160,9 @@ Buffer* D3D12RenderSystem::CreateBuffer(const BufferDescriptor& bufferDesc, cons
     return bufferD3D;
 }
 
-BufferArray* D3D12RenderSystem::CreateBufferArray(std::uint32_t numBuffers, Buffer* const * bufferArray)
+BufferArray* D3D12RenderSystem::CreateBufferArray(ArrayView<VertexBufferView> bufferViews)
 {
-    RenderSystem::AssertCreateBufferArray(numBuffers, bufferArray);
-    return bufferArrays_.emplace<D3D12BufferArray>(numBuffers, bufferArray);
+    return bufferArrays_.emplace<D3D12BufferArray>(bufferViews);
 }
 
 void D3D12RenderSystem::Release(Buffer& buffer)
@@ -212,7 +227,7 @@ Texture* D3D12RenderSystem::CreateTexture(const TextureDescriptor& textureDesc, 
 
         /* Generate MIP-maps if enabled */
         if (MustGenerateMipsOnCreate(textureDesc))
-            D3D12MipGenerator::Get().GenerateMips(*commandContext_, *textureD3D, textureD3D->GetWholeSubresource());
+            sharedDeviceObjects_.mipGenerator.GenerateMips(*commandContext_, *textureD3D, textureD3D->GetWholeSubresource());
     }
 
     return textureD3D;
@@ -305,7 +320,7 @@ void D3D12RenderSystem::Release(Sampler& sampler)
 
 /* ----- Resource Heaps ----- */
 
-ResourceHeap* D3D12RenderSystem::CreateResourceHeap(const ResourceHeapDescriptor& resourceHeapDesc, const ArrayView<ResourceViewDescriptor>& initialResourceViews)
+ResourceHeap* D3D12RenderSystem::CreateResourceHeap(const ResourceHeapDescriptor& resourceHeapDesc, ArrayView<ResourceViewDescriptor> initialResourceViews)
 {
     return resourceHeaps_.emplace<D3D12ResourceHeap>(device_.GetNative(), resourceHeapDesc, initialResourceViews);
 }
@@ -316,7 +331,7 @@ void D3D12RenderSystem::Release(ResourceHeap& resourceHeap)
     resourceHeaps_.erase(&resourceHeap);
 }
 
-std::uint32_t D3D12RenderSystem::WriteResourceHeap(ResourceHeap& resourceHeap, std::uint32_t firstDescriptor, const ArrayView<ResourceViewDescriptor>& resourceViews)
+std::uint32_t D3D12RenderSystem::WriteResourceHeap(ResourceHeap& resourceHeap, std::uint32_t firstDescriptor, ArrayView<ResourceViewDescriptor> resourceViews)
 {
     auto& resourceHeapD3D = LLGL_CAST(D3D12ResourceHeap&, resourceHeap);
     return resourceHeapD3D.CreateResourceViewHandles(device_.GetNative(), firstDescriptor, resourceViews);
@@ -452,12 +467,19 @@ bool D3D12RenderSystem::GetNativeHandle(void* nativeHandle, std::size_t nativeHa
     if (nativeHandle != nullptr && nativeHandleSize == sizeof(Direct3D12::RenderSystemNativeHandle))
     {
         auto* nativeHandleD3D = static_cast<Direct3D12::RenderSystemNativeHandle*>(nativeHandle);
+
         nativeHandleD3D->factory = factory_.Get();
         nativeHandleD3D->factory->AddRef();
+
         nativeHandleD3D->device = device_.GetNative();
         nativeHandleD3D->device->AddRef();
+
         nativeHandleD3D->commandQueue = commandQueue_->GetNative();
         nativeHandleD3D->commandQueue->AddRef();
+
+        nativeHandleD3D->preferredAdapterLuid = {};
+        nativeHandleD3D->minFeatureLevel = device_.GetFeatureLevel();
+
         return true;
     }
     return false;
@@ -531,14 +553,45 @@ void D3D12RenderSystem::CreateFactory(bool debugDevice)
     DXThrowIfFailed(hr, "failed to create DXGI factor 1.4");
 }
 
-void D3D12RenderSystem::QueryVideoAdapters(long flags, ComPtr<IDXGIAdapter>& outPreferredAdatper)
+void D3D12RenderSystem::QueryVideoAdapters(long flags, const LUID& preferredAdapterLuid, ComPtr<IDXGIAdapter>& outPreferredAdapter)
 {
-    videoAdatperInfo_ = DXGetVideoAdapterInfo(factory_.Get(), flags, outPreferredAdatper.ReleaseAndGetAddressOf());
+    if ((flags & RenderSystemFlags::SoftwareDevice) != 0)
+    {
+        ComPtr<IDXGIAdapter> adapter;
+        HRESULT hr = factory_->EnumWarpAdapter(IID_PPV_ARGS(adapter.ReleaseAndGetAddressOf()));
+        DXThrowIfFailed(hr, "failed to enumerate D3D12 WARP adapters");
+
+        DXGI_ADAPTER_DESC desc;
+        hr = adapter->GetDesc(&desc);
+        DXThrowIfFailed(hr, "failed to get DXGI_ADAPTER_DESC from DXGI adapter");
+
+        DXConvertVideoAdapterInfo(adapter.Get(), desc, videoAdapterInfo_);
+        return;
+    }
+
+    /* When an explicit LUID is provided, locate that adapter via the factory's LUID lookup. */
+    if (preferredAdapterLuid.LowPart != 0 || preferredAdapterLuid.HighPart != 0)
+    {
+        ComPtr<IDXGIAdapter> adapter;
+        if (SUCCEEDED(factory_->EnumAdapterByLuid(preferredAdapterLuid, IID_PPV_ARGS(adapter.ReleaseAndGetAddressOf()))))
+        {
+            DXGI_ADAPTER_DESC desc{};
+            if (SUCCEEDED(adapter->GetDesc(&desc)))
+            {
+                DXConvertVideoAdapterInfo(adapter.Get(), desc, videoAdapterInfo_);
+                outPreferredAdapter = adapter;
+                return;
+            }
+        }
+        /* Fall through to the generic picker if the LUID didn't match (CreateDevice will then fail). */
+    }
+
+    videoAdapterInfo_ = DXGetVideoAdapterInfo(factory_.Get(), flags, outPreferredAdapter.ReleaseAndGetAddressOf());
 }
 
-HRESULT D3D12RenderSystem::CreateDevice(IDXGIAdapter* preferredAdapter, long flags)
+HRESULT D3D12RenderSystem::CreateDevice(IDXGIAdapter* preferredAdapter, long flags, D3D_FEATURE_LEVEL minFeatureLevel)
 {
-    const D3D_FEATURE_LEVEL featureLevels[] =
+    const D3D_FEATURE_LEVEL allFeatureLevels[] =
     {
         #if LLGL_D3D12_ENABLE_FEATURELEVEL >= 2
         D3D_FEATURE_LEVEL_12_2,
@@ -555,26 +608,47 @@ HRESULT D3D12RenderSystem::CreateDevice(IDXGIAdapter* preferredAdapter, long fla
         D3D_FEATURE_LEVEL_9_2,
         D3D_FEATURE_LEVEL_9_1,
     };
+
+    /* If a minimum feature level is requested, filter the ladder down to entries >= minFeatureLevel. */
+    const D3D_FEATURE_LEVEL* featureLevelsPtr = allFeatureLevels;
+    std::size_t              featureLevelsLen = LLGL_ARRAY_LENGTH(allFeatureLevels);
+    if (minFeatureLevel != static_cast<D3D_FEATURE_LEVEL>(0))
+    {
+        while (featureLevelsLen > 0 && featureLevelsPtr[featureLevelsLen - 1] < minFeatureLevel)
+            --featureLevelsLen;
+        if (featureLevelsLen == 0)
+            return E_INVALIDARG;
+    }
+    const ArrayView<D3D_FEATURE_LEVEL> featureLevels{ featureLevelsPtr, featureLevelsLen };
+
     HRESULT hr = S_OK;
 
-    if (preferredAdapter != nullptr)
+    if ((flags & RenderSystemFlags::SoftwareDevice) == 0)
     {
-        /* Try to create device with perferred adatper */
-        hr = device_.CreateDXDevice(featureLevels, flags, preferredAdapter);
-        if (SUCCEEDED(hr))
-            return hr;
+        if (preferredAdapter != nullptr)
+        {
+            /* Try to create device with preferred adapter */
+            hr = device_.CreateDXDevice(featureLevels, flags, preferredAdapter);
+            if (SUCCEEDED(hr))
+                return hr;
+        }
+
+        /* Try to create device with default adapter (skipped when a LUID was pinned). */
+        if (minFeatureLevel == static_cast<D3D_FEATURE_LEVEL>(0))
+        {
+            hr = device_.CreateDXDevice(featureLevels, flags);
+            if (SUCCEEDED(hr))
+            {
+                /* Update video adapter info with default adapter */
+                videoAdapterInfo_ = DXGetVideoAdapterInfo(factory_.Get());
+                return hr;
+            }
+        }
     }
 
-    /* Try to create device with default adapter */
-    hr = device_.CreateDXDevice(featureLevels, flags);
-    if (SUCCEEDED(hr))
-    {
-        /* Update video adapter info with default adapter */
-        videoAdatperInfo_ = DXGetVideoAdapterInfo(factory_.Get());
+    /* Use software adapter as fallback (skipped when a LUID was pinned). */
+    if (minFeatureLevel != static_cast<D3D_FEATURE_LEVEL>(0))
         return hr;
-    }
-
-    /* Use software adapter as fallback */
     ComPtr<IDXGIAdapter> adapter;
     factory_->EnumWarpAdapter(IID_PPV_ARGS(adapter.ReleaseAndGetAddressOf()));
     return device_.CreateDXDevice(featureLevels, flags, adapter.Get());
@@ -596,58 +670,9 @@ HRESULT D3D12RenderSystem::QueryDXInterfacesFromNativeHandle(const Direct3D12::R
     hr = dxgiAdapter->GetDesc(&dxgiAdapterDesc);
     DXThrowIfFailed(hr, "failed to get descriptor from DXGI adapter");
 
-    DXConvertVideoAdapterInfo(dxgiAdapter.Get(), dxgiAdapterDesc, videoAdatperInfo_);
+    DXConvertVideoAdapterInfo(dxgiAdapter.Get(), dxgiAdapterDesc, videoAdapterInfo_);
 
     return device_.ShareDXDevice(nativeHandle.device, flags);
-}
-
-static D3D_SHADER_MODEL FindHighestShaderModel(ID3D12Device* device)
-{
-    D3D12_FEATURE_DATA_SHADER_MODEL feature;
-
-    const D3D_SHADER_MODEL shaderModles[] =
-    {
-        #if LLGL_D3D12_ENABLE_FEATURELEVEL >= 1
-        D3D_SHADER_MODEL_6_7,
-        D3D_SHADER_MODEL_6_6,
-        D3D_SHADER_MODEL_6_5,
-        D3D_SHADER_MODEL_6_4,
-        D3D_SHADER_MODEL_6_3,
-        D3D_SHADER_MODEL_6_2,
-        D3D_SHADER_MODEL_6_1,
-        #endif
-        D3D_SHADER_MODEL_6_0,
-        D3D_SHADER_MODEL_5_1,
-    };
-
-    for (D3D_SHADER_MODEL model : shaderModles)
-    {
-        feature.HighestShaderModel = model;
-        HRESULT hr = device->CheckFeatureSupport(D3D12_FEATURE_SHADER_MODEL, &feature, sizeof(feature));
-        if (SUCCEEDED(hr))
-            return model;
-    }
-
-    return D3D_SHADER_MODEL_5_1;
-}
-
-static const char* DXShaderModelToString(D3D_SHADER_MODEL shaderModel)
-{
-    switch (shaderModel)
-    {
-        #if LLGL_D3D12_ENABLE_FEATURELEVEL >= 1
-        case D3D_SHADER_MODEL_6_7: return "6.7";
-        case D3D_SHADER_MODEL_6_6: return "6.6";
-        case D3D_SHADER_MODEL_6_5: return "6.5";
-        case D3D_SHADER_MODEL_6_4: return "6.4";
-        case D3D_SHADER_MODEL_6_3: return "6.3";
-        case D3D_SHADER_MODEL_6_2: return "6.2";
-        case D3D_SHADER_MODEL_6_1: return "6.1";
-        #endif
-        case D3D_SHADER_MODEL_6_0: return "6.0";
-        case D3D_SHADER_MODEL_5_1: return "5.1";
-    }
-    return "";
 }
 
 static const char* DXFeatureLevelToVersion(D3D_FEATURE_LEVEL featureLevel)
@@ -667,9 +692,52 @@ static const char* DXFeatureLevelToVersion(D3D_FEATURE_LEVEL featureLevel)
     return "12.0";
 }
 
-int D3D12RenderSystem::GetMinorVersion() const
+// Returns the HLSL version for the specified Direct3D feature level.
+static std::vector<ShadingLanguage> DXGetHLSLVersions(D3D_SHADER_MODEL shaderModel)
 {
-    return 0;
+    std::vector<ShadingLanguage> languages;
+
+    /* HLSL is supported through FXC (HLSL 4.0-5.1) and optionally through DXC (HLSL 6.0+) */
+    languages.push_back(ShadingLanguage::HLSL);
+
+    /* HLSL 6.0+ can only be compiled from source when DXC was included in this build */
+    #ifdef LLGL_D3D12_ENABLE_DXCOMPILER
+    #   if LLGL_D3D12_ENABLE_FEATURELEVEL >= 1
+    if (shaderModel >= D3D_SHADER_MODEL_6_9) { languages.push_back(ShadingLanguage::HLSL_6_9); }
+    if (shaderModel >= D3D_SHADER_MODEL_6_8) { languages.push_back(ShadingLanguage::HLSL_6_8); }
+    if (shaderModel >= D3D_SHADER_MODEL_6_7) { languages.push_back(ShadingLanguage::HLSL_6_7); }
+    if (shaderModel >= D3D_SHADER_MODEL_6_6) { languages.push_back(ShadingLanguage::HLSL_6_6); }
+    if (shaderModel >= D3D_SHADER_MODEL_6_5) { languages.push_back(ShadingLanguage::HLSL_6_5); }
+    if (shaderModel >= D3D_SHADER_MODEL_6_4) { languages.push_back(ShadingLanguage::HLSL_6_4); }
+    if (shaderModel >= D3D_SHADER_MODEL_6_3) { languages.push_back(ShadingLanguage::HLSL_6_3); }
+    if (shaderModel >= D3D_SHADER_MODEL_6_2) { languages.push_back(ShadingLanguage::HLSL_6_2); }
+    if (shaderModel >= D3D_SHADER_MODEL_6_1) { languages.push_back(ShadingLanguage::HLSL_6_1); }
+    #   endif
+    if (shaderModel >= D3D_SHADER_MODEL_6_0) { languages.push_back(ShadingLanguage::HLSL_6_0); }
+    #endif // /LLGL_D3D12_ENABLE_DXCOMPILER
+
+    if (shaderModel >= D3D_SHADER_MODEL_5_1) { languages.push_back(ShadingLanguage::HLSL_5_1); }
+
+    languages.push_back(ShadingLanguage::HLSL_5_0);
+    languages.push_back(ShadingLanguage::HLSL_4_1);
+    languages.push_back(ShadingLanguage::HLSL_4_0);
+
+    /* DXIL is the primary shading language for D3D12 */
+    languages.push_back(ShadingLanguage::DXIL);
+    #if LLGL_D3D12_ENABLE_FEATURELEVEL >= 1
+    if (shaderModel >= D3D_SHADER_MODEL_6_9) { languages.push_back(ShadingLanguage::DXIL_1_9); }
+    if (shaderModel >= D3D_SHADER_MODEL_6_8) { languages.push_back(ShadingLanguage::DXIL_1_8); }
+    if (shaderModel >= D3D_SHADER_MODEL_6_7) { languages.push_back(ShadingLanguage::DXIL_1_7); }
+    if (shaderModel >= D3D_SHADER_MODEL_6_6) { languages.push_back(ShadingLanguage::DXIL_1_6); }
+    if (shaderModel >= D3D_SHADER_MODEL_6_5) { languages.push_back(ShadingLanguage::DXIL_1_5); }
+    if (shaderModel >= D3D_SHADER_MODEL_6_4) { languages.push_back(ShadingLanguage::DXIL_1_4); }
+    if (shaderModel >= D3D_SHADER_MODEL_6_3) { languages.push_back(ShadingLanguage::DXIL_1_3); }
+    if (shaderModel >= D3D_SHADER_MODEL_6_2) { languages.push_back(ShadingLanguage::DXIL_1_2); }
+    if (shaderModel >= D3D_SHADER_MODEL_6_1) { languages.push_back(ShadingLanguage::DXIL_1_1); }
+    #endif
+    if (shaderModel >= D3D_SHADER_MODEL_6_0) { languages.push_back(ShadingLanguage::DXIL_1_0); }
+
+    return languages;
 }
 
 void D3D12RenderSystem::QueryRendererInfo(RendererInfo& info)
@@ -677,52 +745,67 @@ void D3D12RenderSystem::QueryRendererInfo(RendererInfo& info)
     /* Get D3D version */
     info.rendererName = "Direct3D " + std::string(DXFeatureLevelToVersion(GetFeatureLevel()));
 
-    /* Get shading language support */
-    info.shadingLanguageName = "HLSL ";
+    /*
+    Get shading language support and print it as "HLSL" or "DXIL" version depending on what language has the higher support.
+    For instance, if this backend was not compiled with DXC, HLSL 5.1 will be the highest supported source lagnuage, but DXIL 1.9 might be supported by the runtime.
+    In this case, the output name of the preferred language is DXIL 1.9. Otherwise, HLSL is preferred as name output.
+    */
+    const std::vector<ShadingLanguage> shadingLanguagers = DXGetHLSLVersions(device_.GetShaderModel());
 
-    const D3D_SHADER_MODEL shaderModel = FindHighestShaderModel(device_.GetNative());
-    info.shadingLanguageName += DXShaderModelToString(shaderModel);
+    ShadingLanguage highestHLSL = ShadingLanguage::HLSL;
+    ShadingLanguage highestDXIL = ShadingLanguage::DXIL;
+
+    for (ShadingLanguage language : shadingLanguagers)
+    {
+        int languageNo = static_cast<int>(language);
+        if ((languageNo & static_cast<int>(ShadingLanguage::HLSL)) == static_cast<int>(ShadingLanguage::HLSL))
+        {
+            if (static_cast<int>(highestHLSL) < languageNo)
+                highestHLSL = language;
+        }
+        else if ((languageNo & static_cast<int>(ShadingLanguage::DXIL)) == static_cast<int>(ShadingLanguage::DXIL))
+        {
+            if (static_cast<int>(highestDXIL) < languageNo)
+                highestDXIL = language;
+        }
+    }
+
+    const int hlslVersionNo = (static_cast<int>(highestHLSL) - static_cast<int>(ShadingLanguage::HLSL_6_0));
+    const int dxilVersionNo = (static_cast<int>(highestDXIL) - static_cast<int>(ShadingLanguage::DXIL_1_0));
+    if (hlslVersionNo >= dxilVersionNo)
+        info.shadingLanguageName = ToString(highestHLSL);
+    else
+        info.shadingLanguageName = ToString(highestDXIL);
 
     /* Get device and vendor name from adapter */
-    info.deviceName = videoAdatperInfo_.name.c_str();
-    info.vendorName = GetVendorName(videoAdatperInfo_.vendor);
-}
-
-// Returns the HLSL version for the specified Direct3D feature level.
-static std::vector<ShadingLanguage> DXGetHLSLVersions(D3D_FEATURE_LEVEL featureLevel)
-{
-    std::vector<ShadingLanguage> languages;
-
-    languages.push_back(ShadingLanguage::HLSL);
-    languages.push_back(ShadingLanguage::HLSL_2_0);
-
-    if (featureLevel >= D3D_FEATURE_LEVEL_9_1 ) { languages.push_back(ShadingLanguage::HLSL_2_0a); }
-    if (featureLevel >= D3D_FEATURE_LEVEL_9_2 ) { languages.push_back(ShadingLanguage::HLSL_2_0b); }
-    if (featureLevel >= D3D_FEATURE_LEVEL_9_3 ) { languages.push_back(ShadingLanguage::HLSL_3_0);  }
-    if (featureLevel >= D3D_FEATURE_LEVEL_10_0) { languages.push_back(ShadingLanguage::HLSL_4_0);  }
-    if (featureLevel >= D3D_FEATURE_LEVEL_10_1) { languages.push_back(ShadingLanguage::HLSL_4_1);  }
-    if (featureLevel >= D3D_FEATURE_LEVEL_11_0) { languages.push_back(ShadingLanguage::HLSL_5_0);  }
-    if (featureLevel >= D3D_FEATURE_LEVEL_12_0) { languages.push_back(ShadingLanguage::HLSL_5_1);  }
-
-    return languages;
+    info.deviceName = videoAdapterInfo_.name.c_str();
+    info.vendorName = GetVendorName(videoAdapterInfo_.vendor);
 }
 
 static std::vector<Format> GetDefaultSupportedDXTextureFormats()
 {
-    std::vector<Format> formats;
-
-    std::size_t numFormats = 0;
-    DXGetDefaultSupportedTextureFormats(nullptr, &numFormats);
-
-    formats.resize(numFormats, Format::Undefined);
-    DXGetDefaultSupportedTextureFormats(formats.data(), nullptr);
-
-    formats.insert(
-        formats.end(),
-        { Format::BC4UNorm, Format::BC4SNorm, Format::BC5UNorm, Format::BC5SNorm }
-    );
-
+    std::vector<Format> formats =
+    {
+        Format::BC4UNorm,   Format::BC4SNorm,   Format::BC5UNorm, Format::BC5SNorm,
+        Format::BC6HUFloat, Format::BC6HSFloat, Format::BC7UNorm, Format::BC7UNorm_sRGB,
+    };
+    DXGetDefaultSupportedTextureFormats(formats);
     return formats;
+}
+
+/*
+D3D12SwapChain always creates its back buffer as DXGI_FORMAT_R8G8B8A8_UNORM and ignores
+SwapChainDescriptor::colorFormat, so this is the only format the color buffer can have.
+*/
+static std::vector<Format> GetSupportedDXSwapChainColorFormats()
+{
+    return { Format::RGBA8UNorm };
+}
+
+// Returns the depth-stencil formats DXPickDepthStencilFormat can produce; Direct3D 12 requires feature level 11.0 or later.
+static std::vector<Format> GetSupportedDXSwapChainDepthStencilFormats()
+{
+    return { Format::D16UNorm, Format::D24UNormS8UInt, Format::D32Float, Format::D32FloatS8X24UInt };
 }
 
 static std::uint32_t GetMaxTextureDimension(D3D_FEATURE_LEVEL featureLevel)
@@ -758,21 +841,45 @@ static long GetStorageResourceStageFlags(D3D_FEATURE_LEVEL featureLevel)
 void D3D12RenderSystem::QueryRenderingCaps(RenderingCapabilities& caps)
 {
     const D3D_FEATURE_LEVEL featureLevel = GetFeatureLevel();
-    //const int minorVersion = GetMinorVersion();
 
     const std::uint32_t maxThreadGroups = 65535u;
 
     #if LLGL_D3D12_ENABLE_FEATURELEVEL >= 1
+
+    /* Check ResolveSubresourceRegion support, which is required for depth-stencil resolves */
+    D3D12_FEATURE_DATA_D3D12_OPTIONS2 options2 = {};
+    device_.GetNative()->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS2, &options2, sizeof(options2));
+    deviceCaps_.programmableSamplePositionsTier = options2.ProgrammableSamplePositionsTier;
+
+    /*
+    Multiview is implemented with D3D12 view instancing (SV_ViewID). The view-instanced PSO path uses the
+    stream-based pipeline state API (ID3D12Device2, VIEW_INSTANCING subobject), which requires a newer Windows SDK
+    and is compiled out below feature level 12.1, so the capability is reported under LLGL_D3D12_ENABLE_FEATURELEVEL.
+    */
+    D3D12_FEATURE_DATA_D3D12_OPTIONS3 options3 = {};
+    device_.GetNative()->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS3, &options3, sizeof(options3));
+    deviceCaps_.viewInstancingTier = options3.ViewInstancingTier;
+
+    /* Check variable rate shading support */
+    D3D12_FEATURE_DATA_D3D12_OPTIONS6 options6 = {};
+    device_.GetNative()->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS6, &options6, sizeof(options6));
+    deviceCaps_.variableShadingRateTier = options6.VariableShadingRateTier;
+
+    /* Check mesh shader support */
     D3D12_FEATURE_DATA_D3D12_OPTIONS7 options7 = {};
     device_.GetNative()->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS7, &options7, sizeof(options7));
     deviceCaps_.meshShaderTier = options7.MeshShaderTier;
+
     #endif
 
     /* Query common attributes */
     caps.screenOrigin                               = ScreenOrigin::UpperLeft;
     caps.clippingRange                              = ClippingRange::ZeroToOne;
-    caps.shadingLanguages                           = DXGetHLSLVersions(featureLevel);
+    caps.shadingLanguages                           = DXGetHLSLVersions(device_.GetShaderModel());
     caps.textureFormats                             = GetDefaultSupportedDXTextureFormats();
+    caps.vertexFormats                              = GetSupportedDXVertexFormats();
+    caps.swapChainColorFormats                      = GetSupportedDXSwapChainColorFormats();
+    caps.swapChainDepthStencilFormats               = GetSupportedDXSwapChainDepthStencilFormats();
 
     caps.features.hasRenderTargets                  = true;
     caps.features.has3DTextures                     = true;
@@ -799,12 +906,21 @@ void D3D12RenderSystem::QueryRenderingCaps(RenderingCapabilities& caps)
     caps.features.hasOffsetInstancing               = (featureLevel >= D3D_FEATURE_LEVEL_9_3);
     caps.features.hasIndirectDrawing                = (featureLevel >= D3D_FEATURE_LEVEL_10_0);//???
     caps.features.hasViewportArrays                 = true;
+    #if LLGL_D3D12_ENABLE_FEATURELEVEL >= 1
+    caps.features.hasMultiview                      = (deviceCaps_.viewInstancingTier != D3D12_VIEW_INSTANCING_TIER_NOT_SUPPORTED);
+    #endif
     caps.features.hasConservativeRasterization      = (GetFeatureLevel() >= D3D_FEATURE_LEVEL_12_0);
     caps.features.hasStreamOutputs                  = (featureLevel >= D3D_FEATURE_LEVEL_10_0);
     caps.features.hasLogicOp                        = (featureLevel >= D3D_FEATURE_LEVEL_11_1);
     caps.features.hasPipelineCaching                = true;
     caps.features.hasPipelineStatistics             = true;
     caps.features.hasRenderCondition                = true;
+    #if LLGL_D3D12_ENABLE_FEATURELEVEL >= 1
+    caps.features.hasDepthStencilResolve            = (deviceCaps_.programmableSamplePositionsTier != D3D12_PROGRAMMABLE_SAMPLE_POSITIONS_TIER_NOT_SUPPORTED);
+    caps.features.hasVariableRateShading            = (deviceCaps_.variableShadingRateTier != D3D12_VARIABLE_SHADING_RATE_TIER_NOT_SUPPORTED);
+    #else
+    caps.features.hasMeshShaders                    = false;
+    #endif
 
     /* Query limits */
     caps.limits.lineWidthRange[0]                   = 1.0f;
@@ -826,8 +942,12 @@ void D3D12RenderSystem::QueryRenderingCaps(RenderingCapabilities& caps)
     caps.limits.maxViewports                        = D3D12_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
     caps.limits.maxViewportSize[0]                  = D3D12_VIEWPORT_BOUNDS_MAX;
     caps.limits.maxViewportSize[1]                  = D3D12_VIEWPORT_BOUNDS_MAX;
+    #if LLGL_D3D12_ENABLE_FEATURELEVEL >= 1
+    caps.limits.maxViews                            = (caps.features.hasMultiview ? D3D12_MAX_VIEW_INSTANCE_COUNT : 1u);
+    #endif
     caps.limits.maxBufferSize                       = ULLONG_MAX;
     caps.limits.maxConstantBufferSize               = D3D12_REQ_CONSTANT_BUFFER_ELEMENT_COUNT * 16;
+    caps.limits.maxVertexBufferInputs               = (featureLevel >= D3D_FEATURE_LEVEL_10_1 ? D3D12_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT : 16);
     caps.limits.maxStreamOutputs                    = 4u;
     caps.limits.maxTessFactor                       = 64u;
     caps.limits.minConstantBufferAlignment          = 256u;

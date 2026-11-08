@@ -6,6 +6,8 @@
  */
 
 #include "GLContext.h"
+#include <string>
+#include <algorithm>
 
 
 namespace LLGL
@@ -36,6 +38,11 @@ bool operator != (const GLPixelFormat& lhs, const GLPixelFormat& rhs)
 static GLContext*   g_currentContext;
 static unsigned     g_currentGlobalIndex;
 static unsigned     g_globalIndexCounter;
+
+DeviceVendor GLContext::GetCurrentDeviceVendor()
+{
+    return (g_currentContext != nullptr ? g_currentContext->GetDeviceVendor() : DeviceVendor::Undefined);
+}
 
 bool GLContext::SetCurrentSwapInterval(int interval)
 {
@@ -79,6 +86,7 @@ unsigned GLContext::GetCurrentGlobalIndex()
  */
 
 GLContext::GLContext() :
+    stateMngr_   { this                   },
     globalIndex_ { ++g_globalIndexCounter }
 {
 }
@@ -93,14 +101,26 @@ void GLContext::DeduceColorFormat(int /*rBits*/, int rShift, int /*gBits*/, int 
 
 void GLContext::DeduceDepthStencilFormat(int depthBits, int stencilBits)
 {
-    if (depthBits == 24 && stencilBits == 8)
-        depthStencilFormat_ = Format::D24UNormS8UInt;
-    else if (depthBits == 32 && stencilBits == 8)
-        depthStencilFormat_ = Format::D32FloatS8X24UInt;
-    else if (depthBits == 16 && stencilBits == 0)
-        depthStencilFormat_ = Format::D16UNorm;
-    else if (depthBits == 32 && stencilBits == 0)
-        depthStencilFormat_ = Format::D32Float;
+    /*
+    The bit sizes come from the pixel format the windowing system selected, which is not restricted to the
+    combinations LLGL can request. Map every combination that has a depth or stencil component onto the
+    closest LLGL format, so GetDepthStencilFormat() never reports Format::Undefined for a buffer that exists.
+    */
+    if (depthBits == 0 && stencilBits == 0)
+    {
+        /* Pixel format has neither a depth nor a stencil buffer */
+        depthStencilFormat_ = Format::Undefined;
+    }
+    else if (stencilBits > 0)
+    {
+        /* LLGL has no stencil-only format, so a stencil buffer always implies a combined depth-stencil format */
+        depthStencilFormat_ = (depthBits > 24 ? Format::D32FloatS8X24UInt : Format::D24UNormS8UInt);
+    }
+    else
+    {
+        /* LLGL has no 24-bit depth-only format, so report anything above 16 bits as 32-bit depth */
+        depthStencilFormat_ = (depthBits > 16 ? Format::D32Float : Format::D16UNorm);
+    }
 }
 
 void GLContext::SetDefaultColorFormat()
@@ -111,6 +131,40 @@ void GLContext::SetDefaultColorFormat()
 void GLContext::SetDefaultDepthStencilFormat()
 {
     depthStencilFormat_ = Format::D24UNormS8UInt;
+}
+
+static DeviceVendor GLDetermineDeviceVendor()
+{
+    const char* vendorStr  = reinterpret_cast<const char*>(glGetString(GL_VENDOR));
+    const char* rendererStr = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
+    if (vendorStr != nullptr && rendererStr != nullptr)
+    {
+        std::string vendor{ vendorStr };
+        std::string renderer{ rendererStr };
+
+        std::transform(vendor.begin(), vendor.end(), vendor.begin(), ::tolower);
+        std::transform(renderer.begin(), renderer.end(), renderer.begin(), ::tolower);
+
+        if (vendor.find("nvidia") != std::string::npos || renderer.find("geforce") != std::string::npos)
+            return DeviceVendor::NVIDIA;
+        if (vendor.find("ati") != std::string::npos || vendor.find("amd") != std::string::npos || renderer.find("radeon") != std::string::npos)
+            return DeviceVendor::AMD;
+        if (vendor.find("intel") != std::string::npos || renderer.find("intel") != std::string::npos)
+            return DeviceVendor::Intel;
+        if (vendor.find("apple") != std::string::npos || renderer.find("apple") != std::string::npos)
+            return DeviceVendor::Apple;
+    }
+    return DeviceVendor::Undefined;
+}
+
+void GLContext::DetermineDeviceVendor()
+{
+    deviceVendor_ = GLDetermineDeviceVendor();
+}
+
+bool GLContext::IsSharableForSurface(const Surface *surface) const
+{
+    return true;
 }
 
 

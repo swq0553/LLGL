@@ -54,38 +54,69 @@ AssetReader::operator bool () const
  * Global helper functions
  */
 
-static bool FileExists(const std::string& filename)
+bool FileExists(const std::string& filename)
 {
+    #if LLGL_OS_ANDROID
+
+    // Load asset from compressed APK package via AAssetManager if file path doesn't start with an absolute path
+    if (!filename.empty() && filename[0] != '/')
+    {
+        if (FILE* file = fopen(filename.c_str(), "rb"))
+        {
+            fclose(file);
+            return true;
+        }
+        return false;
+    }
+
+    #endif
+
     std::ifstream file{ filename };
     return file.good();
 };
 
 static std::string FindAssetFilename(const std::string& name)
 {
-    #if defined LLGL_OS_IOS || defined LLGL_OS_MACOS
-
-    // Returns filename for resource from main NSBundle
-    const std::size_t subPathStart = name.find_last_of('/');
-    if (subPathStart != std::string::npos)
-        return FindNSResourcePath(name.substr(subPathStart + 1));
-    else
-        return FindNSResourcePath(name);
-
-    #elif defined LLGL_OS_ANDROID
-
-    // Handle filename resolution with AAssetManager on Android
-    return name;
-
-    #elif defined LLGL_OS_WASM
-
-    // Read asset files for examples from asset folder
-    return "assets/" + name;
-
-    #else
-
     // Return input name if it's a valid filename
     if (FileExists(name))
         return name;
+
+    #if defined LLGL_OS_IOS || defined LLGL_OS_MACOS
+
+    // Returns filename for resource from main NSBundle.
+    // First, try to find resource with input name
+    std::string resourcePath = FindNSResourcePath(name);
+    if (!resourcePath.empty())
+        return resourcePath;
+
+    // Next, try to find resource without relative path.
+    // Shared resources are simply packaged into the Contents/Resoures/ folder of the bundle.
+    const std::size_t subPathStart = name.find_last_of('/');
+    if (subPathStart != std::string::npos)
+        return FindNSResourcePath(name.substr(subPathStart + 1));
+
+    // Resource not found
+    return "";
+
+    #elif defined LLGL_OS_ANDROID
+
+    // Read asset files for examples from asset folder without any subfolders
+    const std::size_t subPathStart = name.find_last_of('/');
+    if (subPathStart != std::string::npos)
+        return name.substr(subPathStart + 1);
+    else
+        return name;
+
+    #elif defined LLGL_OS_WASM
+
+    // Read asset files for examples from asset folder without any subfolders
+    const std::size_t subPathStart = name.find_last_of('/');
+    if (subPathStart != std::string::npos)
+        return "assets/" + name.substr(subPathStart + 1);
+    else
+        return "assets/" + name;
+
+    #else
 
     // Search file in known asset folders
     const std::string assetsRoot = "../../Shared/Assets/";
@@ -102,6 +133,19 @@ static std::string FindAssetFilename(const std::string& name)
     return name;
 }
 
+bool FindAsset(const std::string& name, std::string* outFullPath)
+{
+    // Get full filename for asset
+    std::string filename = FindAssetFilename(name);
+    if (FileExists(filename))
+    {
+        if (outFullPath != nullptr)
+            *outFullPath = std::move(filename);
+        return true;
+    }
+    return false;
+}
+
 std::vector<char> ReadAsset(const std::string& name, std::string* outFullPath)
 {
     // Get full filename for asset
@@ -112,10 +156,10 @@ std::vector<char> ReadAsset(const std::string& name, std::string* outFullPath)
     #if defined LLGL_OS_ANDROID
 
     // Load asset from compressed APK package via AAssetManager
-    FILE* file = fopen(name.c_str(), "rb");
+    FILE* file = fopen(filename.c_str(), "rb");
     if (file == nullptr)
     {
-        LLGL::Log::Errorf("failed to load asset: %s\n", name.c_str());
+        LLGL::Log::Errorf(LLGL::Log::ColorFlags::StdError, "Failed to load asset: %s\n", filename.c_str());
         return {};
     }
 
@@ -140,7 +184,7 @@ std::vector<char> ReadAsset(const std::string& name, std::string* outFullPath)
     std::ifstream file{ filename, std::ios_base::binary };
     if (!file.good())
     {
-        LLGL::Log::Errorf("failed to load asset: %s\n", name.c_str());
+        LLGL::Log::Errorf(LLGL::Log::ColorFlags::StdError, "Failed to load asset: %s\n", name.c_str());
         return {};
     }
 

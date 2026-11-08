@@ -9,8 +9,7 @@
 
 package llgl
 
-// #cgo LDFLAGS: libLLGL.dll.a
-// #cgo CFLAGS: -I ../../include
+// #cgo pkg-config: LLGL
 // #include <LLGL-C/LLGL.h>
 import "C"
 
@@ -61,6 +60,26 @@ const (
     StencilFaceFrontAndBack StencilFace = iota
     StencilFaceFront
     StencilFaceBack
+)
+
+type ShadingRate int
+const (
+    ShadingRateSize1x1 ShadingRate = iota
+    ShadingRateSize1x2
+    ShadingRateSize2x1
+    ShadingRateSize2x2
+    ShadingRateSize2x4
+    ShadingRateSize4x2
+    ShadingRateSize4x4
+)
+
+type ShadingRateOp int
+const (
+    ShadingRateOpKeep ShadingRateOp = iota
+    ShadingRateOpReplace
+    ShadingRateOpMin
+    ShadingRateOpMax
+    ShadingRateOpSum
 )
 
 type Format int
@@ -131,6 +150,8 @@ const (
     FormatRG11B10Float
     FormatRGB9E5Float
     FormatBGR5A1UNorm
+    FormatB5G6R5UNorm
+    FormatBGRA4UNorm
     FormatD16UNorm
     FormatD24UNormS8UInt
     FormatD32Float
@@ -145,6 +166,10 @@ const (
     FormatBC4SNorm
     FormatBC5UNorm
     FormatBC5SNorm
+    FormatBC6HUFloat
+    FormatBC6HSFloat
+    FormatBC7UNorm
+    FormatBC7UNorm_sRGB
     FormatASTC4x4
     FormatASTC4x4_sRGB
     FormatASTC5x4
@@ -193,11 +218,6 @@ const (
     ImageFormatDepthStencil
     ImageFormatStencil
     ImageFormatCompressed
-    ImageFormatBC1
-    ImageFormatBC2
-    ImageFormatBC3
-    ImageFormatBC4
-    ImageFormatBC5
 )
 
 type DataType int
@@ -216,8 +236,8 @@ const (
 
 type ReportType int
 const (
-    ReportTypeDefault ReportType = iota
-    ReportTypeError
+    ReportTypeDefault = 0
+    ReportTypeError   = iota - 1
 )
 
 type Key int
@@ -347,8 +367,9 @@ const (
     KeyBrowserRefresh
     KeyBrowserStop
     KeyBrowserSearch
-    KeyBrowserFavorits
-    KeyBrowserHome
+    KeyBrowserFavorites
+    KeyBrowserFavorits   = KeyBrowserFavorites
+    KeyBrowserHome       = iota - 1
     KeyVolumeMute
     KeyVolumeDown
     KeyVolumeUp
@@ -591,6 +612,7 @@ const (
     WarningTypeImproperState
     WarningTypePointlessOperation
     WarningTypeVaryingBehavior
+    WarningTypeDeprecatedFeature
 )
 
 type AttachmentLoadOp int
@@ -608,56 +630,68 @@ const (
 
 type ShadingLanguage int
 const (
-    ShadingLanguageGLSL ShadingLanguage = iota
-    ShadingLanguageGLSL_110
-    ShadingLanguageGLSL_120
-    ShadingLanguageGLSL_130
-    ShadingLanguageGLSL_140
-    ShadingLanguageGLSL_150
-    ShadingLanguageGLSL_330
-    ShadingLanguageGLSL_400
-    ShadingLanguageGLSL_410
-    ShadingLanguageGLSL_420
-    ShadingLanguageGLSL_430
-    ShadingLanguageGLSL_440
-    ShadingLanguageGLSL_450
-    ShadingLanguageGLSL_460
-    ShadingLanguageESSL
-    ShadingLanguageESSL_100
-    ShadingLanguageESSL_300
-    ShadingLanguageESSL_310
-    ShadingLanguageESSL_320
-    ShadingLanguageHLSL
-    ShadingLanguageHLSL_2_0
-    ShadingLanguageHLSL_2_0a
-    ShadingLanguageHLSL_2_0b
-    ShadingLanguageHLSL_3_0
-    ShadingLanguageHLSL_4_0
-    ShadingLanguageHLSL_4_1
-    ShadingLanguageHLSL_5_0
-    ShadingLanguageHLSL_5_1
-    ShadingLanguageHLSL_6_0
-    ShadingLanguageHLSL_6_1
-    ShadingLanguageHLSL_6_2
-    ShadingLanguageHLSL_6_3
-    ShadingLanguageHLSL_6_4
-    ShadingLanguageHLSL_6_5
-    ShadingLanguageHLSL_6_6
-    ShadingLanguageHLSL_6_7
-    ShadingLanguageHLSL_6_8
-    ShadingLanguageMetal
-    ShadingLanguageMetal_1_0
-    ShadingLanguageMetal_1_1
-    ShadingLanguageMetal_1_2
-    ShadingLanguageMetal_2_0
-    ShadingLanguageMetal_2_1
-    ShadingLanguageMetal_2_2
-    ShadingLanguageMetal_2_3
-    ShadingLanguageMetal_2_4
-    ShadingLanguageMetal_3_0
-    ShadingLanguageSPIRV
-    ShadingLanguageSPIRV_100
-    ShadingLanguageVersionBitmask
+    ShadingLanguageGLSL           = (0x10000)
+    ShadingLanguageGLSL_110       = (0x10000|110)
+    ShadingLanguageGLSL_120       = (0x10000|120)
+    ShadingLanguageGLSL_130       = (0x10000|130)
+    ShadingLanguageGLSL_140       = (0x10000|140)
+    ShadingLanguageGLSL_150       = (0x10000|150)
+    ShadingLanguageGLSL_330       = (0x10000|330)
+    ShadingLanguageGLSL_400       = (0x10000|400)
+    ShadingLanguageGLSL_410       = (0x10000|410)
+    ShadingLanguageGLSL_420       = (0x10000|420)
+    ShadingLanguageGLSL_430       = (0x10000|430)
+    ShadingLanguageGLSL_440       = (0x10000|440)
+    ShadingLanguageGLSL_450       = (0x10000|450)
+    ShadingLanguageGLSL_460       = (0x10000|460)
+    ShadingLanguageESSL           = (0x20000)
+    ShadingLanguageESSL_100       = (0x20000|100)
+    ShadingLanguageESSL_300       = (0x20000|300)
+    ShadingLanguageESSL_310       = (0x20000|310)
+    ShadingLanguageESSL_320       = (0x20000|320)
+    ShadingLanguageHLSL           = (0x30000)
+    ShadingLanguageHLSL_2_0       = (0x30000|200)
+    ShadingLanguageHLSL_2_0a      = (0x30000|201)
+    ShadingLanguageHLSL_2_0b      = (0x30000|202)
+    ShadingLanguageHLSL_3_0       = (0x30000|300)
+    ShadingLanguageHLSL_4_0       = (0x30000|400)
+    ShadingLanguageHLSL_4_1       = (0x30000|410)
+    ShadingLanguageHLSL_5_0       = (0x30000|500)
+    ShadingLanguageHLSL_5_1       = (0x30000|510)
+    ShadingLanguageHLSL_6_0       = (0x30000|600)
+    ShadingLanguageHLSL_6_1       = (0x30000|610)
+    ShadingLanguageHLSL_6_2       = (0x30000|620)
+    ShadingLanguageHLSL_6_3       = (0x30000|630)
+    ShadingLanguageHLSL_6_4       = (0x30000|640)
+    ShadingLanguageHLSL_6_5       = (0x30000|650)
+    ShadingLanguageHLSL_6_6       = (0x30000|660)
+    ShadingLanguageHLSL_6_7       = (0x30000|670)
+    ShadingLanguageHLSL_6_8       = (0x30000|680)
+    ShadingLanguageHLSL_6_9       = (0x30000|690)
+    ShadingLanguageMetal          = (0x40000)
+    ShadingLanguageMetal_1_0      = (0x40000|100)
+    ShadingLanguageMetal_1_1      = (0x40000|110)
+    ShadingLanguageMetal_1_2      = (0x40000|120)
+    ShadingLanguageMetal_2_0      = (0x40000|200)
+    ShadingLanguageMetal_2_1      = (0x40000|210)
+    ShadingLanguageMetal_2_2      = (0x40000|220)
+    ShadingLanguageMetal_2_3      = (0x40000|230)
+    ShadingLanguageMetal_2_4      = (0x40000|240)
+    ShadingLanguageMetal_3_0      = (0x40000|300)
+    ShadingLanguageSPIRV          = (0x50000)
+    ShadingLanguageSPIRV_100      = (0x50000|100)
+    ShadingLanguageDXIL           = (0x60000)
+    ShadingLanguageDXIL_1_0       = (0x60000|100)
+    ShadingLanguageDXIL_1_1       = (0x60000|110)
+    ShadingLanguageDXIL_1_2       = (0x60000|120)
+    ShadingLanguageDXIL_1_3       = (0x60000|130)
+    ShadingLanguageDXIL_1_4       = (0x60000|140)
+    ShadingLanguageDXIL_1_5       = (0x60000|150)
+    ShadingLanguageDXIL_1_6       = (0x60000|160)
+    ShadingLanguageDXIL_1_7       = (0x60000|170)
+    ShadingLanguageDXIL_1_8       = (0x60000|180)
+    ShadingLanguageDXIL_1_9       = (0x60000|190)
+    ShadingLanguageVersionBitmask = 0x0000FFFF
 )
 
 type ScreenOrigin int
@@ -712,8 +746,9 @@ const (
     ShaderTypeGeometry
     ShaderTypeFragment
     ShaderTypeCompute
-    ShaderTypeAmplification
+    ShaderTypeTask
     ShaderTypeMesh
+    ShaderTypeAmplification  = ShaderTypeTask
 )
 
 type ShaderSourceType int
@@ -755,6 +790,7 @@ const (
     SystemValueSampleID
     SystemValueStencil
     SystemValueVertexID
+    SystemValueViewIndex
     SystemValueViewportIndex
 )
 
@@ -779,6 +815,14 @@ const (
     TextureSwizzleGreen
     TextureSwizzleBlue
     TextureSwizzleAlpha
+)
+
+type VersionStatus int
+const (
+    VersionStatusUndefined VersionStatus = iota
+    VersionStatusAlpha
+    VersionStatusBeta
+    VersionStatusStable
 )
 
 
@@ -921,15 +965,16 @@ const (
 
 type ShaderCompileFlags int
 const (
-    ShaderCompileDebug               = (1 << 0)
-    ShaderCompileNoOptimization      = (1 << 1)
-    ShaderCompileOptimizationLevel1  = (1 << 2)
-    ShaderCompileOptimizationLevel2  = (1 << 3)
-    ShaderCompileOptimizationLevel3  = (1 << 4)
-    ShaderCompileWarningsAreErrors   = (1 << 5)
-    ShaderCompilePatchClippingOrigin = (1 << 6)
-    ShaderCompileSeparateShader      = (1 << 7)
-    ShaderCompileDefaultLibrary      = (1 << 8)
+    ShaderCompileDebug                  = (1 << 0)
+    ShaderCompileNoOptimization         = (1 << 1)
+    ShaderCompileOptimizationLevel1     = (1 << 2)
+    ShaderCompileOptimizationLevel2     = (1 << 3)
+    ShaderCompileOptimizationLevel3     = (1 << 4)
+    ShaderCompileWarningsAreErrors      = (1 << 5)
+    ShaderCompilePatchClippingOrigin    = (1 << 6)
+    ShaderCompileSeparateShader         = (1 << 7)
+    ShaderCompileDefaultLibrary         = (1 << 8)
+    ShaderCompileCaseInsensitiveAttribs = (1 << 9)
 )
 
 type StageFlags int
@@ -940,18 +985,20 @@ const (
     StageGeometryStage       = (1 << 3)
     StageFragmentStage       = (1 << 4)
     StageComputeStage        = (1 << 5)
-    StageAmplificationStage  = (1 << 6)
+    StageTaskStage           = (1 << 6)
     StageMeshStage           = (1 << 7)
     StageAllTessStages       = (StageTessControlStage | StageTessEvaluationStage)
     StageAllGraphicsStages   = (StageVertexStage | StageAllTessStages | StageGeometryStage | StageFragmentStage)
     StageAllStages           = (StageAllGraphicsStages | StageComputeStage)
+    StageAmplificationStage  = StageTaskStage
 )
 
 type ResizeBuffersFlags int
 const (
-    ResizeBuffersAdaptSurface   = (1 << 0)
-    ResizeBuffersFullscreenMode = (1 << 1)
-    ResizeBuffersWindowedMode   = (1 << 2)
+    ResizeBuffersAdaptSurface     = (1 << 0)
+    ResizeBuffersFullscreenMode   = (1 << 1)
+    ResizeBuffersWindowedMode     = (1 << 2)
+    ResizeBuffersStrictResolution = (1 << 3)
 )
 
 type WindowFlags int
@@ -967,6 +1014,12 @@ const (
 
 
 /* ----- Structures ----- */
+
+type VertexBufferView struct {
+    Buffer *Buffer /* = nil */
+    Stride uint32  /* = 0 */
+    Offset uint64  /* = 0 */
+}
 
 type CanvasDescriptor struct {
     Title string
@@ -1082,7 +1135,8 @@ type ProfileCommandQueueRecord struct {
     BufferMappings           uint32 /* = 0 */
     TextureWrites            uint32 /* = 0 */
     TextureReads             uint32 /* = 0 */
-    CommandBufferSubmittions uint32 /* = 0 */
+    CommandBufferSubmissions uint32 /* = 0 */
+    CommandBufferSubmittions uint32 /* Identifier `commandBufferSubmittions` is deprecated since 0.05b; Use `commandBufferSubmissions` instead! */
     FenceSubmissions         uint32 /* = 0 */
 }
 
@@ -1147,12 +1201,15 @@ type RenderingFeatures struct {
     HasOffsetInstancing          bool /* = false */
     HasIndirectDrawing           bool /* = false */
     HasViewportArrays            bool /* = false */
+    HasMultiview                 bool /* = false */
+    HasDepthStencilResolve       bool /* = false */
     HasConservativeRasterization bool /* = false */
     HasStreamOutputs             bool /* = false */
     HasLogicOp                   bool /* = false */
     HasPipelineCaching           bool /* = false */
     HasPipelineStatistics        bool /* = false */
     HasRenderCondition           bool /* = false */
+    HasVariableRateShading       bool /* = false */
 }
 
 type RenderingLimits struct {
@@ -1169,8 +1226,10 @@ type RenderingLimits struct {
     MaxComputeShaderWorkGroupSize [3]uint32  /* = {0,0,0} */
     MaxViewports                  uint32     /* = 0 */
     MaxViewportSize               [2]uint32  /* = {0,0} */
+    MaxViews                      uint32     /* = 0 */
     MaxBufferSize                 uint64     /* = 0 */
     MaxConstantBufferSize         uint64     /* = 0 */
+    MaxVertexBufferInputs         uint32     /* = 0 */
     MaxStreamOutputs              uint32     /* = 0 */
     MaxTessFactor                 uint32     /* = 0 */
     MinConstantBufferAlignment    uint64     /* = 0 */
@@ -1324,6 +1383,7 @@ type RasterizerDescriptor struct {
     PolygonMode               PolygonMode         /* = PolygonModeFill */
     CullMode                  CullMode            /* = CullModeDisabled */
     DepthBias                 DepthBiasDescriptor
+    LineWidth                 float32             /* = 1.0 */
     FrontCCW                  bool                /* = false */
     DiscardEnabled            bool                /* = false */
     DepthClampEnabled         bool                /* = false */
@@ -1331,18 +1391,18 @@ type RasterizerDescriptor struct {
     MultiSampleEnabled        bool                /* = false */
     AntiAliasedLineEnabled    bool                /* = false */
     ConservativeRasterization bool                /* = false */
-    LineWidth                 float32             /* = 1.0 */
+    ShadingRateEnabled        bool                /* = false */
 }
 
 type BlendTargetDescriptor struct {
     BlendEnabled    bool            /* = false */
+    ColorMask       uint8           /* = ColorMaskAll */
     SrcColor        BlendOp         /* = BlendOpSrcAlpha */
     DstColor        BlendOp         /* = BlendOpInvSrcAlpha */
     ColorArithmetic BlendArithmetic /* = BlendArithmeticAdd */
     SrcAlpha        BlendOp         /* = BlendOpSrcAlpha */
     DstAlpha        BlendOp         /* = BlendOpInvSrcAlpha */
     AlphaArithmetic BlendArithmetic /* = BlendArithmeticAdd */
-    ColorMask       uint8           /* = ColorMaskAll */
 }
 
 type TessellationDescriptor struct {
@@ -1371,23 +1431,28 @@ type AttachmentFormatDescriptor struct {
 }
 
 type RenderSystemDescriptor struct {
-    ModuleName         string
-    Flags              uint               /* = 0 */
-    Profiler           unsafe.Pointer     /* = nil */
-    Debugger           *RenderingDebugger /* = nil */
-    RendererConfig     unsafe.Pointer     /* = nil */
-    RendererConfigSize uintptr            /* = 0 */
-    NativeHandle       unsafe.Pointer     /* = nil */
-    NativeHandleSize   uintptr            /* = 0 */
+    ModuleName          string
+    Flags               uint               /* = 0 */
+    Profiler            unsafe.Pointer     /* = nil */
+    Debugger            *RenderingDebugger /* = nil */
+    RendererConfig      unsafe.Pointer     /* = nil */
+    RendererConfigSize  uintptr            /* = 0 */
+    NativeHandle        unsafe.Pointer     /* = nil */
+    NativeHandleSize    uintptr            /* = 0 */
+    PlatformContext     unsafe.Pointer     /* = nil */
+    PlatformContextSize uintptr            /* = 0 */
 }
 
 type RenderingCapabilities struct {
-    ScreenOrigin     ScreenOrigin      /* = ScreenOriginUpperLeft */
-    ClippingRange    ClippingRange     /* = ClippingRangeZeroToOne */
-    ShadingLanguages []ShadingLanguage /* = nil */
-    TextureFormats   []Format          /* = nil */
-    Features         RenderingFeatures
-    Limits           RenderingLimits
+    ScreenOrigin                 ScreenOrigin      /* = ScreenOriginUpperLeft */
+    ClippingRange                ClippingRange     /* = ClippingRangeZeroToOne */
+    ShadingLanguages             []ShadingLanguage /* = nil */
+    TextureFormats               []Format          /* = nil */
+    VertexFormats                []Format          /* = nil */
+    SwapChainColorFormats        []Format          /* = nil */
+    SwapChainDepthStencilFormats []Format          /* = nil */
+    Features                     RenderingFeatures
+    Limits                       RenderingLimits
 }
 
 type AttachmentDescriptor struct {
@@ -1420,15 +1485,17 @@ type ComputeShaderAttributes struct {
 }
 
 type SwapChainDescriptor struct {
-    DebugName   string   /* = "" */
-    Resolution  Extent2D
-    ColorBits   int      /* = 32 */
-    DepthBits   int      /* = 24 */
-    StencilBits int      /* = 8 */
-    Samples     uint32   /* = 1 */
-    SwapBuffers uint32   /* = 2 */
-    Fullscreen  bool     /* = false */
-    Resizable   bool     /* = false */
+    DebugName          string   /* = "" */
+    Resolution         Extent2D
+    ColorFormat        Format   /* = FormatUndefined */
+    DepthStencilFormat Format   /* = FormatUndefined */
+    ColorBits          int      /* = 32 */
+    DepthBits          int      /* = 24 */
+    StencilBits        int      /* = 8 */
+    Samples            uint32   /* = 1 */
+    SwapBuffers        uint32   /* = 2 */
+    Fullscreen         bool     /* = false */
+    Resizable          bool     /* = false */
 }
 
 type TextureSwizzleRGBA struct {
@@ -1464,6 +1531,13 @@ type TextureDescriptor struct {
     ClearValue     ClearValue
 }
 
+type VersionInfo struct {
+    Major    uint16        /* = 0 */
+    Minor    uint8         /* = 0 */
+    Status   VersionStatus /* = VersionStatusUndefined */
+    Revision uint32        /* = 0 */
+}
+
 type VertexAttribute struct {
     Name            string
     Format          Format      /* = FormatRGBA32Float */
@@ -1493,7 +1567,7 @@ type BufferDescriptor struct {
     BindFlags      uint              /* = 0 */
     CPUAccessFlags uint              /* = 0 */
     MiscFlags      uint              /* = 0 */
-    VertexAttribs  []VertexAttribute /* = nil */
+    VertexAttribs  []VertexAttribute /* BufferDescriptor.vertexAttribs is deprecated since 0.05b; Use GraphicsPipelineDescriptor.inputVertexAttribs instead! */
 }
 
 type StaticSamplerDescriptor struct {
@@ -1513,10 +1587,10 @@ type StencilDescriptor struct {
 type BlendDescriptor struct {
     AlphaToCoverageEnabled  bool                     /* = false */
     IndependentBlendEnabled bool                     /* = false */
+    BlendFactorDynamic      bool                     /* = false */
     SampleMask              uint32                   /* = ~0u */
     LogicOp                 LogicOp                  /* = LogicOpDisabled */
     BlendFactor             [4]float32               /* = {0.0,0.0,0.0,0.0} */
-    BlendFactorDynamic      bool                     /* = false */
     Targets                 [8]BlendTargetDescriptor
 }
 
@@ -1526,16 +1600,19 @@ type RenderPassDescriptor struct {
     DepthAttachment   AttachmentFormatDescriptor
     StencilAttachment AttachmentFormatDescriptor
     Samples           uint32                        /* = 1 */
+    Views             uint32                        /* = 1 */
 }
 
 type RenderTargetDescriptor struct {
-    DebugName              string                  /* = "" */
-    RenderPass             *RenderPass             /* = nil */
-    Resolution             Extent2D
-    Samples                uint32                  /* = 1 */
-    ColorAttachments       [8]AttachmentDescriptor
-    ResolveAttachments     [8]AttachmentDescriptor
-    DepthStencilAttachment AttachmentDescriptor
+    DebugName                     string                  /* = "" */
+    RenderPass                    *RenderPass             /* = nil */
+    Resolution                    Extent2D
+    Samples                       uint32                  /* = 1 */
+    Views                         uint32                  /* = 1 */
+    ColorAttachments              [8]AttachmentDescriptor
+    ResolveAttachments            [8]AttachmentDescriptor
+    DepthStencilAttachment        AttachmentDescriptor
+    DepthStencilResolveAttachment AttachmentDescriptor
 }
 
 type VertexShaderAttributes struct {
@@ -1574,6 +1651,8 @@ type GraphicsPipelineDescriptor struct {
     DebugName            string                 /* = "" */
     PipelineLayout       *PipelineLayout        /* = nil */
     RenderPass           *RenderPass            /* = nil */
+    InputVertexAttribs   []VertexAttribute      /* = nil */
+    OutputVertexAttribs  []VertexAttribute      /* = nil */
     VertexShader         *Shader                /* = nil */
     TessControlShader    *Shader                /* = nil */
     TessEvaluationShader *Shader                /* = nil */
@@ -1594,7 +1673,8 @@ type MeshPipelineDescriptor struct {
     DebugName           string               /* = "" */
     PipelineLayout      *PipelineLayout      /* = nil */
     RenderPass          *RenderPass          /* = nil */
-    AmplificationShader *Shader              /* = nil */
+    TaskShader          *Shader              /* = nil */
+    AmplificationShader *Shader              /* Identifier `amplificationShader` is deprecated since 0.05b; Use `taskShader` instead! */
     MeshShader          *Shader              /* = nil */
     FragmentShader      *Shader              /* = nil */
     Viewports           []Viewport           /* = nil */
@@ -1613,18 +1693,19 @@ type ResourceViewDescriptor struct {
 }
 
 type ShaderDescriptor struct {
-    DebugName  string                   /* = "" */
-    Type       ShaderType               /* = ShaderTypeUndefined */
-    Source     string                   /* = "" */
-    SourceSize uintptr                  /* = 0 */
-    SourceType ShaderSourceType         /* = ShaderSourceTypeCodeFile */
-    EntryPoint string                   /* = "" */
-    Profile    string                   /* = "" */
-    Defines    *ShaderMacro             /* = nil */
-    Flags      uint                     /* = 0 */
-    Vertex     VertexShaderAttributes
-    Fragment   FragmentShaderAttributes
-    Compute    ComputeShaderAttributes
+    DebugName      string                   /* = "" */
+    Type           ShaderType               /* = ShaderTypeUndefined */
+    Source         string                   /* = "" */
+    SourceSize     uintptr                  /* = 0 */
+    SourceType     ShaderSourceType         /* = ShaderSourceTypeCodeFile */
+    EntryPoint     string                   /* = "" */
+    Profile        string                   /* = "" */
+    Defines        *ShaderMacro             /* = nil */
+    Flags          uint                     /* = 0 */
+    IncludeHandler *IncludeHandler          /* = nil */
+    Vertex         VertexShaderAttributes   /* LLGLShaderDescriptor.vertex is deprecated since 0.05b; Use the `inputVertexAttribs` and `outputVertexAttribs` fields in LLGLGraphicsPipelineDescriptor instead */
+    Fragment       FragmentShaderAttributes
+    Compute        ComputeShaderAttributes
 }
 
 type ShaderReflection struct {

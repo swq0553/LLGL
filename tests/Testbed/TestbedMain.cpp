@@ -13,6 +13,7 @@
 
 #if _WIN32
 #   include <Windows.h>
+#   include <winapifamily.h>
 #endif
 
 
@@ -118,19 +119,23 @@ static void PrintHelpDocs()
         "%s"
         "\n"
         "OPTIONS:\n"
+        "  -b, --break ........................ Break debugger on errors\n"
         "  -c, --color ........................ Enable colored console output\n"
         "  -d, --debug [=OPT] ................. Enable debug layers (gpu, cpu, gpu+cpu)\n"
         "  -f, --fast ......................... Run fast test; skips certain configurations\n"
         "  -g, --greedy ....................... Keep running each test even after failure\n"
         "  -h, --help ......................... Print this help document\n"
+        "  -i, --icontext ..................... Create immediate context\n"
         "  -p, --pedantic ..................... Disable diff-checking threshold\n"
         "  -run=LIST .......................... Only run tests in comma separated list\n"
-        "  -s, --santiy-check ................. Print some test results even on success\n"
+        "  -s, --sanity-check ................. Print some test results even on success\n"
         "  -t, --timing ....................... Print timing results\n"
         "  -v, --verbose ...................... Print more information\n"
         "  --amd .............................. Prefer AMD device\n"
         "  --intel ............................ Prefer Intel device\n"
         "  --nvidia ........................... Prefer NVIDIA device\n"
+        "  --ref .............................. Use software device as reference\n"
+        "  --update ........................... Override reference images and skip diffs\n"
         "\n"
         "NOTE:\n"
         "  Single character options can be combined, e.g. -cdf is equivalent to -c -d -f\n",
@@ -261,7 +266,7 @@ static LONG WINAPI TestbedVectoredExceptionHandler(EXCEPTION_POINTERS* e)
 
 int main(int argc, char* argv[])
 {
-    #ifdef _MSC_VER
+    #if defined _MSC_VER && WINAPI_FAMILY == WINAPI_FAMILY_DESKTOP_APP
 
     AddVectoredExceptionHandler(1, TestbedVectoredExceptionHandler);
     __try

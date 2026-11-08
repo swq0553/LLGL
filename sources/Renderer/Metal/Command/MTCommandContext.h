@@ -27,6 +27,7 @@ struct Viewport;
 struct Scissor;
 class Resource;
 class RenderTarget;
+class MTBuffer;
 class MTResourceHeap;
 class MTGraphicsPSO;
 class MTComputePSO;
@@ -51,6 +52,11 @@ enum class MTEncoderState
 // Metal command context: Manages the scheduling between render and compute command encoders.
 class MTCommandContext
 {
+
+    public:
+
+        static constexpr NSUInteger maxNumVertexBuffers         = 32;
+        static constexpr NSUInteger maxNumViewportsAndScissors  = LLGL_MAX_NUM_VIEWPORTS_AND_SCISSORS;
 
     public:
 
@@ -99,6 +105,9 @@ class MTCommandContext
 
         // Dispatches the current tessellation compute shader and returns the respective render encoder.
         id<MTLRenderCommandEncoder> DispatchTessellationAndGetRenderEncoder(NSUInteger numPatches, NSUInteger numInstances = 1);
+
+        // High-level function to encode the FillBuffer() command.
+        void CmdFillBuffer(MTBuffer& dstBufferMT, std::uint64_t dstOffset, std::uint32_t value, std::uint64_t fillSize);
 
     public:
 
@@ -238,10 +247,10 @@ class MTCommandContext
 
         NSUInteger GetMaxLocalThreads(id<MTLComputePipelineState> computePSO) const;
 
-    private:
+        void FillBufferByte1(MTBuffer& bufferMT, const NSRange& range, std::uint8_t value);
+        void FillBufferByte4(MTBuffer& bufferMT, const NSRange& range, std::uint32_t value);
 
-        static constexpr NSUInteger maxNumVertexBuffers         = 32;
-        static constexpr NSUInteger maxNumViewportsAndScissors  = LLGL_MAX_NUM_VIEWPORTS_AND_SCISSORS;
+    private:
 
         enum DirtyBits
         {

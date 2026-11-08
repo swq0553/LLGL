@@ -46,6 +46,7 @@ DEF_TEST( DepthBuffer )
     {
         psoDesc.pipelineLayout              = layouts[PipelineSolid];
         psoDesc.renderPass                  = renderTarget->GetRenderPass();
+        psoDesc.inputVertexAttribs          = vertexFormats[VertFmtStd].attributes;
         psoDesc.vertexShader                = shaders[VSSolid];
         psoDesc.depth.testEnabled           = true;
         psoDesc.depth.writeEnabled          = true;
@@ -78,7 +79,7 @@ DEF_TEST( DepthBuffer )
     sceneConstants.vpMatrix = projection * vMatrix;
 
     // Render scene
-    cmdBuffer->Begin();
+    BEGIN();
     {
         cmdBuffer->UpdateBuffer(*sceneCbuffer, 0, &sceneConstants, sizeof(sceneConstants));
         cmdBuffer->BeginRenderPass(*renderTarget);
@@ -94,7 +95,7 @@ DEF_TEST( DepthBuffer )
         }
         cmdBuffer->EndRenderPass();
     }
-    cmdBuffer->End();
+    END();
 
     // Readback depth buffer and compare with expected result
     const Offset3D readbackTexPosition

@@ -17,6 +17,9 @@ E.g. use binding flags BindFlags::Sampled and let LLGL determine how to bind to 
 */
 DEF_TEST( SamplerBuffer )
 {
+    if (!caps.features.hasComputeShaders)
+        return TestResult::Skipped;
+
     //TODO: not supported for Metal yet
     if (renderer->GetRendererID() == RendererID::Metal)
         return TestResult::Skipped;
@@ -140,7 +143,7 @@ DEF_TEST( SamplerBuffer )
     }
 
     // Dispatch compute kernels
-    cmdBuffer->Begin();
+    BEGIN();
     {
         cmdBuffer->FillBuffer(*outTypedBuffer, 0, 0xDEADBEEF);
         cmdBuffer->FillBuffer(*outStructBuffer, 0, 0xDEADBEEF);
@@ -170,7 +173,7 @@ DEF_TEST( SamplerBuffer )
 
         cmdBuffer->Dispatch(numEntries, 1, 1);
     }
-    cmdBuffer->End();
+    END();
 
     // Evaluate readback result
     if (opt.verbose)

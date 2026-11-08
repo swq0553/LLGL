@@ -152,8 +152,12 @@ class LLGL_EXPORT SwapChain : public RenderTarget
 
         /**
         \brief Resizes all swap buffers of this swap-chain.
-        \param[in] resolution Specifies the new resolution.
+        \param[in] resolution Specifies the new resolution. This is only a hint:
+        the platform may clamp it to what the surface permits.
         \param[in] flags Optional flags to specify whether the swap-chain's surface is to be adjusted as well and to toggle fullscreen mode.
+        \return True if the swap buffers were resized to a valid resolution, which may differ from the requested one;
+        use GetResolution to query what was actually allocated. If the ResizeBuffersFlags::StrictResolution flag is
+        specified, only returns true if the swap buffers were resized to the exact resolution requested.
         \see GetResolution
         \see ResizeBuffersFlags
         */
@@ -177,7 +181,7 @@ class LLGL_EXPORT SwapChain : public RenderTarget
         \brief Puts the display, the swap-chain's surface is resident in, into fullscreen mode or puts it back into normal mode.
         \param[in] enable If true, puts the display into fullscreen mode (Display::SetDisplayMode). Otherwise, puts the display back into normal mode (Display::ResetDisplayMode).
         \return True on success, otherwise the display does not support the resolution of this swap-chain.
-        \remarks When switchting back from fullscreen into normal mode, this function restores the previous position of the swap-chain's surface.
+        \remarks When switching back from fullscreen into normal mode, this function restores the previous position of the swap-chain's surface.
         \see Display::SetDisplayMode
         \see Display::ResetDisplayMode
         */
@@ -197,9 +201,15 @@ class LLGL_EXPORT SwapChain : public RenderTarget
 
         /**
         \brief Primary function to resize all swap buffers.
+        \param[in] resolution Specifies the requested resolution. This is only a hint:
+        the platform may clamp it to what the surface permits.
+        \return The resolution that was actually allocated, which becomes the value GetResolution() reports.
+        Return a zero extent (i.e. <code>Extent2D{ 0, 0 }</code>) to indicate failure, in which case
+        the previously reported resolution remains unchanged.
         \see ResizeBuffers
+        \see SetResolution
         */
-        virtual bool ResizeBuffersPrimary(const Extent2D& resolution) = 0;
+        virtual Extent2D ResizeBuffersPrimary(const Extent2D& resolution) = 0;
 
     protected:
 
@@ -214,7 +224,7 @@ class LLGL_EXPORT SwapChain : public RenderTarget
         \param[in] surface Optional shared pointer to a surface which will be used as main render target.
         If this is null, a new surface is created for this swap-chain.
         \param[in] title Specifies the surface title. This is only used if \c surface is null.
-        \param[in] swapChainDesc Specifies the swap-chain descriptor. Ues the resolution for the surface content size, fullscreen, and resiable flags.
+        \param[in] swapChainDesc Specifies the swap-chain descriptor. Use the resolution for the surface content size, fullscreen, and resiable flags.
         \param[in] windowContext Optional pointer to a NativeHandle structure. This is only used for desktop platforms.
         \param[in] windowContextSize Size (in bytes) of the native handle \c windowContext points to. This must be equal to \c sizeof(LLGL::NativeHandle).
         \see WindowDescriptor::windowContext
@@ -249,6 +259,22 @@ class LLGL_EXPORT SwapChain : public RenderTarget
         \see SetDisplayFullscreenMode
         */
         bool ResetDisplayFullscreenMode();
+
+        /**
+        \brief Overrides the reported swap-chain resolution with the one that was actually allocated.
+        \remarks A requested resolution is only ever a hint: the platform may clamp it to what the
+        surface permits, e.g. Vulkan clamps every swap-chain extent to \c VkSurfaceCapabilitiesKHR::minImageExtent
+        and \c maxImageExtent, which on most windowing systems both equal the window's current client area.
+        GetResolution() must describe the buffers that exist rather than the ones that were asked for;
+        reporting the request instead leaves callers deriving viewports, scissors and projection matrices
+        from a resolution the backbuffer does not have. During ResizeBuffers() this is handled by the
+        return value of ResizeBuffersPrimary(); backends that (re-)allocate their swap buffers outside
+        of that function - e.g. at creation time or when recreating an out-of-date swap-chain - should
+        call this function from wherever the allocation happens.
+        \see GetResolution
+        \see ResizeBuffersPrimary
+        */
+        void SetResolution(const Extent2D &resolution);
 
     protected:
 

@@ -9,6 +9,15 @@
 #define LLGL_C99_TYPES_H
 
 
+#include <stdbool.h>
+#include <stddef.h>
+
+
+/* Annotation macros used for wrapper generator */
+
+#define LLGL_ANNOTATE(...)
+
+
 /* Object conversion macros */
 
 #define LLGL_NULL_OBJECT            { NULL }
@@ -37,7 +46,6 @@ LLGL_DECL_WRAPPER_TYPE( LLGLQueryHeap );
 LLGL_DECL_WRAPPER_TYPE( LLGLRenderPass );
 /*LLGL_DECL_WRAPPER_TYPE( LLGLRenderSystem );*/
 LLGL_DECL_WRAPPER_TYPE( LLGLRenderTarget );
-LLGL_DECL_WRAPPER_TYPE( LLGLRenderingProfiler );
 LLGL_DECL_WRAPPER_TYPE( LLGLRenderingDebugger );
 LLGL_DECL_WRAPPER_TYPE( LLGLResource );
 LLGL_DECL_WRAPPER_TYPE( LLGLResourceHeap );
@@ -54,9 +62,15 @@ LLGL_DECL_CONST_WRAPPER_TYPE( LLGLReport );
 #undef LLGL_DECL_CONST_WRAPPER_TYPE
 
 
-/* Annotation macros used for wrapper generator */
+/* Custom interface macros */
 
-#define LLGL_ANNOTATE(...)
+//TODO:
+// This is a workaround!
+// The wrapper generator needs to translate this in C# and Go output as function pointer,
+// but it currently behaves like an interface, since the C++ source material *is* an interface.
+// This mix and match is confusing and the wrapper generator fails to translate it correctly.
+typedef bool (*LLGLIncludeHandler)(const char* inFilename, size_t* outFileContentSize, void* outFileContent LLGL_ANNOTATE(NULL), LLGLReport outReport);
+
 
 
 #endif

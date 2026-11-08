@@ -10,28 +10,41 @@
 #include <stdexcept>
 #include <algorithm>
 #include <limits>
+#include <float.h> // for FLT_MAX
 #include <sstream>
 #include <LLGL/Utils/ForRange.h>
 #include <LLGL/Trap.h>
 
 
 /*
-* Global helper functions
-*/
+ * Global helper functions
+ */
 
-std::vector<TexturedVertex> LoadObjModel(const std::string& filename)
+std::vector<TexturedVertex> LoadObjModel(const std::string& filename, unsigned verticesPerFace, long flags)
 {
     std::vector<TexturedVertex> vertices;
-    LoadObjModel(vertices, filename);
+    LoadObjModel(vertices, filename, verticesPerFace, flags);
     return vertices;
 }
 
-TriangleMesh LoadObjModel(std::vector<TexturedVertex>& vertices, const std::string& filename, unsigned verticesPerFace)
+static Gs::Vector3f ToLeftHanded(const Gs::Vector3f& v)
 {
+    return { v.x, v.y, -v.z };
+}
+
+TriangleMesh LoadObjModel(std::vector<TexturedVertex>& vertices, const std::string& filename, unsigned verticesPerFace, long flags)
+{
+    LLGL_VERIFY(verticesPerFace <= 4);
+
+    const bool keepRightHandedCoordinates   = ((flags & MeshFlags_KeepRightHandedCoordinates) != 0);
+    const bool triangulate                  = ((flags & MeshFlags_Triangulate) != 0);
+    const bool flipTexCoordU                = ((flags & MeshFlags_FlipTexCoordU) != 0);
+    const bool flipTexCoordV                = ((flags & MeshFlags_FlipTexCoordV) != 0);
+
     // Read obj file
     std::vector<char> fileContent = ReadAsset(filename);
     if (fileContent.empty())
-        LLGL_THROW_RUNTIME_ERROR("failed to load model from file: \"%s\"", filename.c_str());
+        LLGL_THROW_RUNTIME_ERROR("Failed to load model from file: \"%s\"", filename.c_str());
 
     // Initialize triangle mesh
     TriangleMesh mesh;
@@ -61,13 +74,17 @@ TriangleMesh LoadObjModel(std::vector<TexturedVertex>& vertices, const std::stri
             s >> v.x;
             s >> v.y;
             s >> v.z;
-            coords.push_back(v);
+            coords.push_back(keepRightHandedCoordinates ? v : ToLeftHanded(v));
         }
         else if (mode == "vt")
         {
             Gs::Vector2f t;
             s >> t.x;
             s >> t.y;
+            if (flipTexCoordU)
+                t.x = 1.0f - t.x;
+            if (flipTexCoordV)
+                t.y = 1.0f - t.y;
             texCoords.push_back(t);
         }
         else if (mode == "vn")
@@ -76,16 +93,16 @@ TriangleMesh LoadObjModel(std::vector<TexturedVertex>& vertices, const std::stri
             s >> n.x;
             s >> n.y;
             s >> n.z;
-            normals.push_back(n);
+            normals.push_back(keepRightHandedCoordinates ? n : ToLeftHanded(n));
         }
         else if (mode == "f")
         {
-            unsigned int v = 0, vt = 0, vn = 0;
+            unsigned int v[4] = {}, vt[4] = {}, vn[4] = {};
 
             for (unsigned i = 0; i < verticesPerFace; ++i)
             {
                 // Read vertex index
-                s >> v;
+                s >> v[i];
 
                 // Read texture-coordinate index
                 if (texCoords.empty())
@@ -93,22 +110,47 @@ TriangleMesh LoadObjModel(std::vector<TexturedVertex>& vertices, const std::stri
                 else
                 {
                     s.ignore(1);
-                    s >> vt;
+                    s >> vt[i];
                     s.ignore(1);
                 }
 
                 // Read normal index
-                s >> vn;
+                s >> vn[i];
+            }
 
-                // Add vertex to mesh
+            auto AddFaceVertex = [&vertices, &v, &vn, &vt, &coords, &normals, &texCoords](unsigned iface)
+            {
+                unsigned iv = v[iface] - 1;
+                unsigned in = vn[iface] - 1;
+                unsigned it = vt[iface] - 1;
+
                 vertices.push_back(
                     {
-                        coords[v - 1],
-                        (vn - 1 < normals.size() ? normals[vn - 1] : Gs::Vector3f{}),
-                        (vt - 1 < texCoords.size() ? texCoords[vt - 1] : Gs::Vector2f{})
+                        coords[iv],
+                        (in < normals.size() ? normals[in] : Gs::Vector3f{}),
+                        (it < texCoords.size() ? texCoords[it] : Gs::Vector2f{})
                     }
                 );
-                mesh.numVertices++;
+            };
+
+            // Add vertices to mesh.
+            // Wavefront Object format stores triangle indices in counter-clockwise (CCW) order.
+            // Since LLGL::RasterizerDescriptor::frontCCW is disabled by default, we convert it to clockwise (CW) order here.
+            if (verticesPerFace == 4 && triangulate)
+            {
+                AddFaceVertex(2);
+                AddFaceVertex(1);
+                AddFaceVertex(0);
+
+                AddFaceVertex(3);
+                AddFaceVertex(2);
+                AddFaceVertex(0);
+            }
+            else
+            {
+                for (unsigned i = 0; i < verticesPerFace; ++i)
+                    AddFaceVertex(verticesPerFace - i - 1);
+                mesh.numVertices += verticesPerFace;
             }
         }
     }
@@ -116,12 +158,13 @@ TriangleMesh LoadObjModel(std::vector<TexturedVertex>& vertices, const std::stri
     return mesh;
 }
 
-std::vector<Gs::Vector3f> GenerateCubeVertices()
+std::vector<Gs::Vector3f> GenerateCubeVertices(bool isRightHanded)
 {
+    const float z = (isRightHanded ? -1.0f : +1.0f);
     return
     {
-        { -1, -1, -1 }, { -1,  1, -1 }, {  1,  1, -1 }, {  1, -1, -1 },
-        { -1, -1,  1 }, { -1,  1,  1 }, {  1,  1,  1 }, {  1, -1,  1 },
+        { -1, -1, -z }, { -1,  1, -z }, {  1,  1, -z }, {  1, -1, -z },
+        { -1, -1,  z }, { -1,  1,  z }, {  1,  1,  z }, {  1, -1,  z },
     };
 }
 
@@ -138,46 +181,91 @@ std::vector<std::uint32_t> GenerateCubeTriangleIndices()
     };
 }
 
-std::vector<TexturedVertex> GenerateTexturedCubeVertices()
+std::vector<ColoredVertex> GenerateColoredCubeVertices(bool isRightHanded)
 {
+    const float z = (isRightHanded ? -1.0f : +1.0f);
+    return
+    {
+        //   x   y   z      r  g  b
+        // -X face (cyan)
+         { { -1, -1,  z }, { 0, 1, 1 } },
+         { { -1,  1,  z }, { 0, 1, 1 } },
+         { { -1,  1, -z }, { 0, 1, 1 } },
+         { { -1, -1, -z }, { 0, 1, 1 } },
+
+        // +X face (red)
+         { {  1, -1, -z }, { 1, 0, 0 } },
+         { {  1,  1, -z }, { 1, 0, 0 } },
+         { {  1,  1,  z }, { 1, 0, 0 } },
+         { {  1, -1,  z }, { 1, 0, 0 } },
+
+        // +Y face (green)
+         { { -1,  1, -z }, { 0, 1, 0 } },
+         { { -1,  1,  z }, { 0, 1, 0 } },
+         { {  1,  1,  z }, { 0, 1, 0 } },
+         { {  1,  1, -z }, { 0, 1, 0 } },
+
+        // -Y face (magenta)
+         { { -1, -1,  z }, { 1, 0, 1 } },
+         { { -1, -1, -z }, { 1, 0, 1 } },
+         { {  1, -1, -z }, { 1, 0, 1 } },
+         { {  1, -1,  z }, { 1, 0, 1 } },
+
+        // +Z face (blue) - the face the user sees first since they start looking down -Z
+         { {  1, -1,  z }, { 0, 0, 1 } },
+         { {  1,  1,  z }, { 0, 0, 1 } },
+         { { -1,  1,  z }, { 0, 0, 1 } },
+         { { -1, -1,  z }, { 0, 0, 1 } },
+
+        // -Z face (yellow)
+         { { -1, -1, -z }, { 1, 1, 0 } },
+         { { -1,  1, -z }, { 1, 1, 0 } },
+         { {  1,  1, -z }, { 1, 1, 0 } },
+         { {  1, -1, -z }, { 1, 1, 0 } },
+    };
+}
+
+std::vector<TexturedVertex> GenerateTexturedCubeVertices(bool isRightHanded)
+{
+    const float z = (isRightHanded ? -1.0f : +1.0f);
     return
     {
         //   x   y   z      nx  ny  nz      u  v
         // front
-        { { -1, -1, -1 }, {  0,  0, -1 }, { 0, 1 } },
-        { { -1,  1, -1 }, {  0,  0, -1 }, { 0, 0 } },
-        { {  1,  1, -1 }, {  0,  0, -1 }, { 1, 0 } },
-        { {  1, -1, -1 }, {  0,  0, -1 }, { 1, 1 } },
+        { { -1, -1, -z }, {  0,  0, -z }, { 0, 1 } },
+        { { -1,  1, -z }, {  0,  0, -z }, { 0, 0 } },
+        { {  1,  1, -z }, {  0,  0, -z }, { 1, 0 } },
+        { {  1, -1, -z }, {  0,  0, -z }, { 1, 1 } },
 
         // right
-        { {  1, -1, -1 }, { +1,  0,  0 }, { 0, 1 } },
-        { {  1,  1, -1 }, { +1,  0,  0 }, { 0, 0 } },
-        { {  1,  1,  1 }, { +1,  0,  0 }, { 1, 0 } },
-        { {  1, -1,  1 }, { +1,  0,  0 }, { 1, 1 } },
+        { {  1, -1, -z }, { +1,  0,  0 }, { 0, 1 } },
+        { {  1,  1, -z }, { +1,  0,  0 }, { 0, 0 } },
+        { {  1,  1,  z }, { +1,  0,  0 }, { 1, 0 } },
+        { {  1, -1,  z }, { +1,  0,  0 }, { 1, 1 } },
 
         // left
-        { { -1, -1,  1 }, { -1,  0,  0 }, { 0, 1 } },
-        { { -1,  1,  1 }, { -1,  0,  0 }, { 0, 0 } },
-        { { -1,  1, -1 }, { -1,  0,  0 }, { 1, 0 } },
-        { { -1, -1, -1 }, { -1,  0,  0 }, { 1, 1 } },
+        { { -1, -1,  z }, { -1,  0,  0 }, { 0, 1 } },
+        { { -1,  1,  z }, { -1,  0,  0 }, { 0, 0 } },
+        { { -1,  1, -z }, { -1,  0,  0 }, { 1, 0 } },
+        { { -1, -1, -z }, { -1,  0,  0 }, { 1, 1 } },
 
         // top
-        { { -1,  1, -1 }, {  0, +1,  0 }, { 0, 1 } },
-        { { -1,  1,  1 }, {  0, +1,  0 }, { 0, 0 } },
-        { {  1,  1,  1 }, {  0, +1,  0 }, { 1, 0 } },
-        { {  1,  1, -1 }, {  0, +1,  0 }, { 1, 1 } },
+        { { -1,  1, -z }, {  0, +1,  0 }, { 0, 1 } },
+        { { -1,  1,  z }, {  0, +1,  0 }, { 0, 0 } },
+        { {  1,  1,  z }, {  0, +1,  0 }, { 1, 0 } },
+        { {  1,  1, -z }, {  0, +1,  0 }, { 1, 1 } },
 
         // bottom
-        { { -1, -1,  1 }, {  0, -1,  0 }, { 0, 1 } },
-        { { -1, -1, -1 }, {  0, -1,  0 }, { 0, 0 } },
-        { {  1, -1, -1 }, {  0, -1,  0 }, { 1, 0 } },
-        { {  1, -1,  1 }, {  0, -1,  0 }, { 1, 1 } },
+        { { -1, -1,  z }, {  0, -1,  0 }, { 0, 1 } },
+        { { -1, -1, -z }, {  0, -1,  0 }, { 0, 0 } },
+        { {  1, -1, -z }, {  0, -1,  0 }, { 1, 0 } },
+        { {  1, -1,  z }, {  0, -1,  0 }, { 1, 1 } },
 
         // back
-        { {  1, -1,  1 }, {  0,  0, +1 }, { 0, 1 } },
-        { {  1,  1,  1 }, {  0,  0, +1 }, { 0, 0 } },
-        { { -1,  1,  1 }, {  0,  0, +1 }, { 1, 0 } },
-        { { -1, -1,  1 }, {  0,  0, +1 }, { 1, 1 } },
+        { {  1, -1,  z }, {  0,  0, +z }, { 0, 1 } },
+        { {  1,  1,  z }, {  0,  0, +z }, { 0, 0 } },
+        { { -1,  1,  z }, {  0,  0, +z }, { 1, 0 } },
+        { { -1, -1,  z }, {  0,  0, +z }, { 1, 1 } },
     };
 }
 
@@ -327,5 +415,79 @@ Gs::Vector3f ClosestPointOnLineSegment(const Gs::Vector3f& linePointA, const Gs:
     lineDirection *= interpolation;
 
     return linePointA + lineDirection;
+}
+
+bool IntersectRayWithAABB(const Ray3f& ray, const AABB3f& aabb, AABBIntersection* outIntersection)
+{
+    float tmin = 0.0f;
+    float tmax = FLT_MAX;
+
+    // Axis (0/1/2) and sign (-1/+1) of the slab whose near plane last raised 'tmin', i.e. the hit face
+    int hitAxis = -1;
+    int hitSign = 0;
+
+    // Loop for all three slabs
+    for (int i = 0; i < 3; ++i)
+    {
+        if (std::abs(ray.direction[i]) < Gs::Epsilon<float>())
+        {
+            // Ray is parallel to slab. No hit if origin not within slab
+            if (ray.origin[i] < aabb.bbMin[i] || ray.origin[i] > aabb.bbMax[i])
+                return false;
+        }
+        else
+        {
+            // Compute intersection t value of ray with near and far plane of slab
+            const float ood = 1.0f / ray.direction[i];
+            float t1 = (aabb.bbMin[i] - ray.origin[i]) * ood;
+            float t2 = (aabb.bbMax[i] - ray.origin[i]) * ood;
+
+            // Make t1 be intersection with near plane, t2 with far plane
+            const bool swapped = (t1 > t2);
+            if (swapped)
+                std::swap(t1, t2);
+
+            // Compute the intersection of slab intersection intervals
+            if (t1 > tmin)
+            {
+                tmin = t1;
+                hitAxis = i;
+                hitSign = (swapped ? +1 : -1);
+            }
+            tmax = std::min(tmax, t2);
+
+            // Exit with no collision as soon as slab intersection becomes empty
+            if (tmin > tmax)
+                return false;
+        }
+    }
+
+    // Return intersection interpolation factor and face normal
+    if (outIntersection != nullptr)
+    {
+        outIntersection->interpolator = tmin;
+
+        Gs::Vector3i normal;
+        if (hitAxis >= 0)
+            normal[hitAxis] = hitSign;
+        outIntersection->normal = normal;
+    }
+
+    return true;
+}
+
+bool IntersectRayWithPlane(const Ray3f& ray, const Gs::Vector3f& planeNormal, float planeDistance, float* outInterpolator)
+{
+    const float sgnDistanceToPlane      = Gs::Dot(planeNormal, ray.origin) + planeDistance;
+    const float intersectInterpolator   = -sgnDistanceToPlane / Gs::Dot(planeNormal, ray.direction);
+
+    if (intersectInterpolator >= 0.0f)
+    {
+        if (outInterpolator != nullptr)
+            *outInterpolator = intersectInterpolator;
+        return true;
+    }
+
+    return false;
 }
 

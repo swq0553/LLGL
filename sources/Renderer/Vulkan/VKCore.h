@@ -80,7 +80,7 @@ std::string VKApiVersionToString(std::uint32_t version);
 // Converts the boolean value into a VkBool322 value.
 VkBool32 VKBoolean(bool value);
 
-#if VK_EXT_debug_marker
+#if VK_EXT_debug_utils
 // Sets the debug name of the specified Vulkan object.
 void VKSetDebugName(VkDevice device, VkObjectType type, std::uint64_t handle, const char* name);
 #endif
@@ -97,6 +97,10 @@ std::vector<VkQueueFamilyProperties> VKQueryQueueFamilyProperties(VkPhysicalDevi
 VKSurfaceSupportDetails VKQuerySurfaceSupport(VkPhysicalDevice device, VkSurfaceKHR surface);
 VKQueueFamilyIndices VKFindQueueFamilies(VkPhysicalDevice device, const VkQueueFlags flags, VkSurfaceKHR* surface = nullptr);
 VkFormat VKFindSupportedImageFormat(VkPhysicalDevice device, const VkFormat* candidates, std::size_t numCandidates, VkImageTiling tiling, VkFormatFeatureFlags features);
+
+// Returns true if the implementation exposes a memory type supporting the specified type bits and properties.
+// Use this to probe for optional memory properties: VKFindMemoryType traps rather than reporting failure.
+bool VKHasMemoryType(const VkPhysicalDeviceMemoryProperties& memoryProperties, std::uint32_t memoryTypeBits, VkMemoryPropertyFlags properties);
 
 // Returns the memory type index that supports the specified type bits and properties, or traps program execution on failure.
 std::uint32_t VKFindMemoryType(const VkPhysicalDeviceMemoryProperties& memoryProperties, std::uint32_t memoryTypeBits, VkMemoryPropertyFlags properties);

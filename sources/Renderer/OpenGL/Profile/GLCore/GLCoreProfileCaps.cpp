@@ -109,26 +109,48 @@ static std::vector<ShadingLanguage> GLQueryShadingLanguages()
     return languages;
 }
 
+static void GetDefaultSupportedGLBaseFormats(std::vector<Format>& formats)
+{
+    formats.insert(
+        formats.end(),
+        {
+            Format::R8UNorm,            Format::R8SNorm,            Format::R8UInt,             Format::R8SInt,
+            Format::R16UNorm,           Format::R16SNorm,           Format::R16UInt,            Format::R16SInt,            Format::R16Float,
+            Format::R32UInt,            Format::R32SInt,            Format::R32Float,
+            Format::RG8UNorm,           Format::RG8SNorm,           Format::RG8UInt,            Format::RG8SInt,
+            Format::RG16UNorm,          Format::RG16SNorm,          Format::RG16UInt,           Format::RG16SInt,           Format::RG16Float,
+            Format::RG32UInt,           Format::RG32SInt,           Format::RG32Float,
+            Format::RGB8UNorm,          Format::RGB8SNorm,          Format::RGB8UInt,           Format::RGB8SInt,
+            Format::RGB16UNorm,         Format::RGB16SNorm,         Format::RGB16UInt,          Format::RGB16SInt,          Format::RGB16Float,
+            Format::RGB32UInt,          Format::RGB32SInt,          Format::RGB32Float,
+            Format::RGBA8UNorm,         Format::RGBA8SNorm,         Format::RGBA8UInt,          Format::RGBA8SInt,
+            Format::RGBA16UNorm,        Format::RGBA16SNorm,        Format::RGBA16UInt,         Format::RGBA16SInt,         Format::RGBA16Float,
+            Format::RGBA32UInt,         Format::RGBA32SInt,         Format::RGBA32Float,
+        }
+    );
+}
+
 static std::vector<Format> GetDefaultSupportedGLTextureFormats()
 {
-    return
+    std::vector<Format> textureFormats =
     {
         Format::A8UNorm,
-        Format::R8UNorm,            Format::R8SNorm,            Format::R8UInt,             Format::R8SInt,
-        Format::R16UNorm,           Format::R16SNorm,           Format::R16UInt,            Format::R16SInt,            Format::R16Float,
-        Format::R32UInt,            Format::R32SInt,            Format::R32Float,
-        Format::RG8UNorm,           Format::RG8SNorm,           Format::RG8UInt,            Format::RG8SInt,
-        Format::RG16UNorm,          Format::RG16SNorm,          Format::RG16UInt,           Format::RG16SInt,           Format::RG16Float,
-        Format::RG32UInt,           Format::RG32SInt,           Format::RG32Float,
-        Format::RGB8UNorm,          Format::RGB8SNorm,          Format::RGB8UInt,           Format::RGB8SInt,
-        Format::RGB16UNorm,         Format::RGB16SNorm,         Format::RGB16UInt,          Format::RGB16SInt,          Format::RGB16Float,
-        Format::RGB32UInt,          Format::RGB32SInt,          Format::RGB32Float,
-        Format::RGBA8UNorm,         Format::RGBA8SNorm,         Format::RGBA8UInt,          Format::RGBA8SInt,
-        Format::RGBA16UNorm,        Format::RGBA16SNorm,        Format::RGBA16UInt,         Format::RGBA16SInt,         Format::RGBA16Float,
-        Format::RGBA32UInt,         Format::RGBA32SInt,         Format::RGBA32Float,
+        Format::RGB8UNorm_sRGB,
         Format::BGRA8UNorm,         Format::BGRA8UNorm_sRGB,    Format::BGRA8SNorm,         Format::BGRA8UInt,          Format::BGRA8SInt,
         Format::D16UNorm,           Format::D32Float,           Format::D24UNormS8UInt,     Format::D32FloatS8X24UInt,
     };
+    GetDefaultSupportedGLBaseFormats(textureFormats);
+    return textureFormats;
+}
+
+static std::vector<Format> GLGetSupportedVertexFormats()
+{
+    std::vector<Format> vertexFormats =
+    {
+        Format::BGRA8UNorm, // Only one BGRA vertex format (GL_ARB_vertex_array_bgra)
+    };
+    GetDefaultSupportedGLBaseFormats(vertexFormats);
+    return vertexFormats;
 }
 
 static void GLGetRenderingAttribs(RenderingCapabilities& caps)
@@ -183,7 +205,7 @@ static void GLGetSupportedTextureFormats(std::vector<Format>& textureFormats)
 
 static void GLGetSupportedFeatures(RenderingFeatures& features)
 {
-    /* Query all boolean capabilies by their respective OpenGL extension */
+    /* Query all boolean capabilities by their respective OpenGL extension */
     features.hasRenderTargets               = HasExtension(GLExt::ARB_framebuffer_object);
     features.has3DTextures                  = HasExtension(GLExt::EXT_texture3D);
     features.hasCubeTextures                = HasExtension(GLExt::ARB_texture_cube_map);
@@ -208,6 +230,7 @@ static void GLGetSupportedFeatures(RenderingFeatures& features)
     features.hasConservativeRasterization   = (HasExtension(GLExt::NV_conservative_raster) || HasExtension(GLExt::INTEL_conservative_rasterization));
     features.hasStreamOutputs               = (HasExtension(GLExt::EXT_transform_feedback) || HasExtension(GLExt::NV_transform_feedback));
     features.hasLogicOp                     = true;
+    features.hasDepthStencilResolve         = true;
     features.hasPipelineCaching             = (HasExtension(GLExt::ARB_get_program_binary) && GLGetInt(GL_NUM_PROGRAM_BINARY_FORMATS) > 0);
     features.hasPipelineStatistics          = HasExtension(GLExt::ARB_pipeline_statistics_query);
     features.hasRenderCondition             = true;
@@ -279,6 +302,18 @@ static void GLGetFeatureLimits(const RenderingFeatures& features, RenderingLimit
     #ifdef GL_MAX_UNIFORM_BLOCK_SIZE
     limits.maxConstantBufferSize            = static_cast<std::uint64_t>(GLGetUInt(GL_MAX_UNIFORM_BLOCK_SIZE));
     #endif
+
+    /* Determine maximum number of vertex buffer bindings */
+    /*#if GL_ARB_vertex_attrib_binding
+    if (HasExtension(GLExt::ARB_vertex_attrib_binding))
+    {
+        limits.maxVertexBufferInputs        = static_cast<std::uint32_t>(GLGetUInt(GL_MAX_VERTEX_ATTRIB_BINDINGS));
+    }
+    else
+    #endif*/
+    {
+        limits.maxVertexBufferInputs        = static_cast<std::uint32_t>(GLGetUInt(GL_MAX_VERTEX_ATTRIBS));
+    }
 
     /* Determine maximum number of stream-outputs */
     #if GL_ARB_transform_feedback3
@@ -403,6 +438,9 @@ void GLQueryRenderingCaps(RenderingCapabilities& caps)
 {
     GLGetRenderingAttribs(caps);
     GLGetSupportedTextureFormats(caps.textureFormats);
+    caps.vertexFormats                  = GLGetSupportedVertexFormats();
+    caps.swapChainColorFormats          = GLGetSupportedSwapChainColorFormats();
+    caps.swapChainDepthStencilFormats   = GLGetSupportedSwapChainDepthStencilFormats();
     GLGetSupportedFeatures(caps.features);
     GLGetFeatureLimits(caps.features, caps.limits);
     GLGetTextureLimits(caps.features, caps.limits);

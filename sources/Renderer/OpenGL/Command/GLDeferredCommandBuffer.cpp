@@ -28,7 +28,7 @@
 
 #include "../Buffer/GLBufferWithVAO.h"
 #include "../Buffer/GLBufferWithXFB.h"
-#include "../Buffer/GLBufferArrayWithVAO.h"
+#include "../Buffer/GLBufferArray.h"
 
 #include "../RenderState/GLStateManager.h"
 #include "../RenderState/GLGraphicsPSO.h"
@@ -62,9 +62,7 @@ void GLDeferredCommandBuffer::Begin()
 
 void GLDeferredCommandBuffer::End()
 {
-    /* Pack virtual command buffer if it has to be traversed multiple times */
-    if ((GetFlags() & CommandBufferFlags::MultiSubmit) != 0)
-        buffer_.Pack();
+    // dummy
 }
 
 void GLDeferredCommandBuffer::Execute(CommandBuffer& secondaryCommandBuffer)
@@ -319,51 +317,29 @@ void GLDeferredCommandBuffer::SetScissors(std::uint32_t numScissors, const Sciss
 
 void GLDeferredCommandBuffer::SetVertexBuffer(Buffer& buffer)
 {
-    if ((buffer.GetBindFlags() & BindFlags::VertexBuffer) != 0)
-    {
-        auto& vertexBufferGL = LLGL_CAST(GLBufferWithVAO&, buffer);
-        auto cmd = AllocCommand<GLCmdBindVertexArray>(GLOpcodeBindVertexArray);
-        cmd->vertexArray = vertexBufferGL.GetVertexArray();
-        
-        #if LLGL_GLEXT_TRNASFORM_FEEDBACK2
-        SetTransformFeedbackChecked(vertexBufferGL);
-        #endif // /LLGL_GLEXT_TRNASFORM_FEEDBACK2
-    }
+    SetVertexBufferInternal(buffer, 0);
 }
 
-void GLDeferredCommandBuffer::SetVertexBuffer(Buffer& buffer, std::uint32_t numVertexAttribs, const VertexAttribute* vertexAttribs)
+void GLDeferredCommandBuffer::SetVertexBuffer(Buffer& buffer, std::uint32_t /*stride*/, std::uint64_t offset)
 {
-    if ((buffer.GetBindFlags() & BindFlags::VertexBuffer) != 0)
-    {
-        auto& vertexBufferGL = LLGL_CAST(GLBufferWithVAO&, buffer);
+    /*
+    Ignores the stride, since it's already part of the PSO and it must match that value per function contract.
+    This parameter is intended for other backends, like D3D.
+    */
+    SetVertexBufferInternal(buffer, offset);
+}
 
-        auto cmdBuildVertexArray = AllocCommand<GLCmdBuildVertexArray>(GLOpcodeBuildVertexArray, sizeof(GLVertexAttribute) * numVertexAttribs);
-        {
-            cmdBuildVertexArray->numVertexAttribs = numVertexAttribs;
-            auto* dstVertexAttribs = reinterpret_cast<GLVertexAttribute*>(cmdBuildVertexArray + 1);
-
-            for_range(i, numVertexAttribs)
-                GLConvertVertexAttrib(dstVertexAttribs[i], vertexAttribs[i], vertexBufferGL.GetID());
-        }
-
-        auto cmdBindVertexArray = AllocCommand<GLCmdBindVertexArray>(GLOpcodeBindVertexArray);
-        {
-            cmdBindVertexArray->vertexArray = vertexBufferGL.GetVertexArray();
-        }
-        
-        #if LLGL_GLEXT_TRNASFORM_FEEDBACK2
-        SetTransformFeedbackChecked(vertexBufferGL);
-        #endif // /LLGL_GLEXT_TRNASFORM_FEEDBACK2
-    }
+void GLDeferredCommandBuffer::SetVertexBuffers(std::uint32_t numBufferViews, const VertexBufferView* bufferViews)
+{
+    SetVertexBuffersInternal(numBufferViews, bufferViews);
 }
 
 void GLDeferredCommandBuffer::SetVertexBufferArray(BufferArray& bufferArray)
 {
     if ((bufferArray.GetBindFlags() & BindFlags::VertexBuffer) != 0)
     {
-        auto& bufferArrayWithVAO = LLGL_CAST(GLBufferArrayWithVAO&, bufferArray);
-        auto cmd = AllocCommand<GLCmdBindVertexArray>(GLOpcodeBindVertexArray);
-        cmd->vertexArray = bufferArrayWithVAO.GetVertexArray();
+        auto& bufferArrayGL = LLGL_CAST(GLBufferArray&, bufferArray);
+        SetBufferInputLayout(bufferArrayGL.GetInputLayout());
     }
 }
 
@@ -440,7 +416,7 @@ void GLDeferredCommandBuffer::BindResource(GLResourceType type, GLuint slot, std
         case GLResourceType_UBO:
         {
             auto& bufferGL = LLGL_CAST(GLBuffer&, resource);
-            BindBufferBase(GLBufferTarget::UniformBuffer, bufferGL, slot);
+            BindBufferBase(GLBufferTarget::UniformBuffer, bufferGL.GetID(), slot);
         }
         break;
 
@@ -455,7 +431,7 @@ void GLDeferredCommandBuffer::BindResource(GLResourceType type, GLuint slot, std
             {
                 case GLBufferInterface_SSBO:
                 {
-                    BindBufferBase(GLBufferTarget::ShaderStorageBuffer, bufferGL, slot);
+                    BindBufferBase(GLBufferTarget::ShaderStorageBuffer, bufferGL.GetID(), slot);
                     #if LLGL_GLEXT_MEMORY_BARRIERS
                     InvalidateMemoryBarriersForStorageResource(bufferGL.GetBindFlags(), GL_SHADER_STORAGE_BARRIER_BIT);
                     #endif
@@ -701,6 +677,8 @@ void GLDeferredCommandBuffer::SetUniforms(std::uint32_t first, const void* data,
     if (boundShaderPipeline == nullptr)
         return /*GL_INVALID_VALUE*/;
 
+    FlushDeferredShaderPipeline();
+
     const std::uint32_t dataSizeInWords = dataSize / 4;
     const auto& uniformMap = boundPipelineState->GetUniformMap();
 
@@ -804,7 +782,7 @@ void GLDeferredCommandBuffer::BeginStreamOutput(std::uint32_t numBuffers, Buffer
 
 void GLDeferredCommandBuffer::EndStreamOutput()
 {
-    #ifdef __APPLE__
+    #if __APPLE__
     AllocOpcode(GLOpcodeEndTransformFeedback);
     #else
     if (HasExtension(GLExt::EXT_transform_feedback))
@@ -814,7 +792,17 @@ void GLDeferredCommandBuffer::EndStreamOutput()
     else
         LLGL_TRAP_TRANSFORM_FEEDBACK_NOT_SUPPORTED();
     #endif
+
     AllocOpcode(GLOpcodeEndBufferXfb);
+
+    #if LLGL_WEBGL
+    /*
+    From WebGL implementation ANGLE (glTexSubImage2DRobustANGLE):
+    "It is undefined behavior to use a pixel unpack buffer that is bound for transform feedback".
+    So always unbind all potential transform feedback buffers at the end of stream output section.
+    */
+    BindBuffersBase(GLBufferTarget::TransformFeedbackBuffer, 0, LLGL_MAX_NUM_SO_BUFFERS, nullptr);
+    #endif
 }
 
 /* ----- Drawing ----- */
@@ -825,16 +813,9 @@ In the following Draw* functions, 'indices' is from type <GLintptr> to have the 
 The indices actually store the index start offset, but must be passed to GL as a void-pointer, due to an obsolete API.
 */
 
-#if LLGL_GLEXT_MEMORY_BARRIERS
-#   define LLGL_FLUSH_MEMORY_BARRIERS() \
-        FlushMemoryBarriers()
-#else
-#   define LLGL_FLUSH_MEMORY_BARRIERS()
-#endif // /LLGL_GLEXT_MEMORY_BARRIERS
-
 void GLDeferredCommandBuffer::Draw(std::uint32_t numVertices, std::uint32_t firstVertex)
 {
-    LLGL_FLUSH_MEMORY_BARRIERS();
+    FlushDrawCommandStates();
     auto cmd = AllocCommand<GLCmdDrawArrays>(GLOpcodeDrawArrays);
     {
         cmd->mode   = GetDrawMode();
@@ -845,7 +826,7 @@ void GLDeferredCommandBuffer::Draw(std::uint32_t numVertices, std::uint32_t firs
 
 void GLDeferredCommandBuffer::DrawIndexed(std::uint32_t numIndices, std::uint32_t firstIndex)
 {
-    LLGL_FLUSH_MEMORY_BARRIERS();
+    FlushDrawCommandStates();
     auto cmd = AllocCommand<GLCmdDrawElements>(GLOpcodeDrawElements);
     {
         cmd->mode       = GetDrawMode();
@@ -857,7 +838,7 @@ void GLDeferredCommandBuffer::DrawIndexed(std::uint32_t numIndices, std::uint32_
 
 void GLDeferredCommandBuffer::DrawIndexed(std::uint32_t numIndices, std::uint32_t firstIndex, std::int32_t vertexOffset)
 {
-    LLGL_FLUSH_MEMORY_BARRIERS();
+    FlushDrawCommandStates();
     auto cmd = AllocCommand<GLCmdDrawElementsBaseVertex>(GLOpcodeDrawElementsBaseVertex);
     {
         cmd->mode       = GetDrawMode();
@@ -870,7 +851,7 @@ void GLDeferredCommandBuffer::DrawIndexed(std::uint32_t numIndices, std::uint32_
 
 void GLDeferredCommandBuffer::DrawInstanced(std::uint32_t numVertices, std::uint32_t firstVertex, std::uint32_t numInstances)
 {
-    LLGL_FLUSH_MEMORY_BARRIERS();
+    FlushDrawCommandStates();
     auto cmd = AllocCommand<GLCmdDrawArraysInstanced>(GLOpcodeDrawArraysInstanced);
     {
         cmd->mode           = GetDrawMode();
@@ -883,7 +864,7 @@ void GLDeferredCommandBuffer::DrawInstanced(std::uint32_t numVertices, std::uint
 void GLDeferredCommandBuffer::DrawInstanced(std::uint32_t numVertices, std::uint32_t firstVertex, std::uint32_t numInstances, std::uint32_t firstInstance)
 {
     #ifndef __APPLE__
-    LLGL_FLUSH_MEMORY_BARRIERS();
+    FlushDrawCommandStates();
     auto cmd = AllocCommand<GLCmdDrawArraysInstancedBaseInstance>(GLOpcodeDrawArraysInstancedBaseInstance);
     {
         cmd->mode           = GetDrawMode();
@@ -899,7 +880,7 @@ void GLDeferredCommandBuffer::DrawInstanced(std::uint32_t numVertices, std::uint
 
 void GLDeferredCommandBuffer::DrawIndexedInstanced(std::uint32_t numIndices, std::uint32_t numInstances, std::uint32_t firstIndex)
 {
-    LLGL_FLUSH_MEMORY_BARRIERS();
+    FlushDrawCommandStates();
     auto cmd = AllocCommand<GLCmdDrawElementsInstanced>(GLOpcodeDrawElementsInstanced);
     {
         cmd->mode           = GetDrawMode();
@@ -912,7 +893,7 @@ void GLDeferredCommandBuffer::DrawIndexedInstanced(std::uint32_t numIndices, std
 
 void GLDeferredCommandBuffer::DrawIndexedInstanced(std::uint32_t numIndices, std::uint32_t numInstances, std::uint32_t firstIndex, std::int32_t vertexOffset)
 {
-    LLGL_FLUSH_MEMORY_BARRIERS();
+    FlushDrawCommandStates();
     auto cmd = AllocCommand<GLCmdDrawElementsInstancedBaseVertex>(GLOpcodeDrawElementsInstancedBaseVertex);
     {
         cmd->mode           = GetDrawMode();
@@ -927,7 +908,7 @@ void GLDeferredCommandBuffer::DrawIndexedInstanced(std::uint32_t numIndices, std
 void GLDeferredCommandBuffer::DrawIndexedInstanced(std::uint32_t numIndices, std::uint32_t numInstances, std::uint32_t firstIndex, std::int32_t vertexOffset, std::uint32_t firstInstance)
 {
     #ifndef __APPLE__
-    LLGL_FLUSH_MEMORY_BARRIERS();
+    FlushDrawCommandStates();
     auto cmd = AllocCommand<GLCmdDrawElementsInstancedBaseVertexBaseInstance>(GLOpcodeDrawElementsInstancedBaseVertexBaseInstance);
     {
         cmd->mode           = GetDrawMode();
@@ -945,7 +926,7 @@ void GLDeferredCommandBuffer::DrawIndexedInstanced(std::uint32_t numIndices, std
 
 void GLDeferredCommandBuffer::DrawIndirect(Buffer& buffer, std::uint64_t offset)
 {
-    LLGL_FLUSH_MEMORY_BARRIERS();
+    FlushDrawCommandStates();
     auto cmd = AllocCommand<GLCmdDrawArraysIndirect>(GLOpcodeDrawArraysIndirect);
     {
         cmd->id             = LLGL_CAST(GLBuffer&, buffer).GetID();
@@ -958,7 +939,7 @@ void GLDeferredCommandBuffer::DrawIndirect(Buffer& buffer, std::uint64_t offset)
 
 void GLDeferredCommandBuffer::DrawIndirect(Buffer& buffer, std::uint64_t offset, std::uint32_t numCommands, std::uint32_t stride)
 {
-    LLGL_FLUSH_MEMORY_BARRIERS();
+    FlushDrawCommandStates();
     #ifndef __APPLE__
     if (HasExtension(GLExt::ARB_multi_draw_indirect))
     {
@@ -988,7 +969,7 @@ void GLDeferredCommandBuffer::DrawIndirect(Buffer& buffer, std::uint64_t offset,
 
 void GLDeferredCommandBuffer::DrawIndexedIndirect(Buffer& buffer, std::uint64_t offset)
 {
-    LLGL_FLUSH_MEMORY_BARRIERS();
+    FlushDrawCommandStates();
     auto cmd = AllocCommand<GLCmdDrawElementsIndirect>(GLOpcodeDrawElementsIndirect);
     {
         cmd->id             = LLGL_CAST(GLBuffer&, buffer).GetID();
@@ -1002,7 +983,7 @@ void GLDeferredCommandBuffer::DrawIndexedIndirect(Buffer& buffer, std::uint64_t 
 
 void GLDeferredCommandBuffer::DrawIndexedIndirect(Buffer& buffer, std::uint64_t offset, std::uint32_t numCommands, std::uint32_t stride)
 {
-    LLGL_FLUSH_MEMORY_BARRIERS();
+    FlushDrawCommandStates();
     #ifndef __APPLE__
     if (HasExtension(GLExt::ARB_multi_draw_indirect))
     {
@@ -1034,10 +1015,10 @@ void GLDeferredCommandBuffer::DrawIndexedIndirect(Buffer& buffer, std::uint64_t 
 
 void GLDeferredCommandBuffer::DrawStreamOutput()
 {
-    LLGL_FLUSH_MEMORY_BARRIERS();
     if (GLBufferWithXFB* bufferWithXfbGL = GetRenderState().boundBufferWithFxb)
     {
-        #if LLGL_GLEXT_TRNASFORM_FEEDBACK2
+        FlushDrawCommandStates();
+        #if LLGL_GLEXT_TRANSFORM_FEEDBACK2
         if (HasExtension(GLExt::ARB_transform_feedback2))
         {
             auto cmd = AllocCommand<GLCmdDrawTransformFeedback>(GLOpcodeDrawTransformFeedback);
@@ -1047,7 +1028,7 @@ void GLDeferredCommandBuffer::DrawStreamOutput()
             }
         }
         else
-        #endif // /LLGL_GLEXT_TRNASFORM_FEEDBACK2
+        #endif // /LLGL_GLEXT_TRANSFORM_FEEDBACK2
         {
             auto cmd = AllocCommand<GLCmdDrawEmulatedTransformFeedback>(GLOpcodeDrawEmulatedTransformFeedback);
             {
@@ -1063,7 +1044,7 @@ void GLDeferredCommandBuffer::DrawStreamOutput()
 void GLDeferredCommandBuffer::Dispatch(std::uint32_t numWorkGroupsX, std::uint32_t numWorkGroupsY, std::uint32_t numWorkGroupsZ)
 {
     #ifndef __APPLE__
-    LLGL_FLUSH_MEMORY_BARRIERS();
+    FlushComputeCommandStates();
     auto cmd = AllocCommand<GLCmdDispatchCompute>(GLOpcodeDispatchCompute);
     {
         cmd->numgroups[0] = numWorkGroupsX;
@@ -1078,7 +1059,7 @@ void GLDeferredCommandBuffer::Dispatch(std::uint32_t numWorkGroupsX, std::uint32
 void GLDeferredCommandBuffer::DispatchIndirect(Buffer& buffer, std::uint64_t offset)
 {
     #ifndef __APPLE__
-    LLGL_FLUSH_MEMORY_BARRIERS();
+    FlushComputeCommandStates();
     auto cmd = AllocCommand<GLCmdDispatchComputeIndirect>(GLOpcodeDispatchComputeIndirect);
     {
         cmd->id         = LLGL_CAST(const GLBuffer&, buffer).GetID();
@@ -1148,13 +1129,13 @@ bool GLDeferredCommandBuffer::IsPrimary() const
  * ======= Private: =======
  */
 
-void GLDeferredCommandBuffer::BindBufferBase(const GLBufferTarget bufferTarget, const GLBuffer& bufferGL, std::uint32_t slot)
+void GLDeferredCommandBuffer::BindBufferBase(const GLBufferTarget bufferTarget, GLuint id, std::uint32_t slot)
 {
     auto cmd = AllocCommand<GLCmdBindBufferBase>(GLOpcodeBindBufferBase);
     {
         cmd->target = bufferTarget;
         cmd->index  = slot;
-        cmd->id     = bufferGL.GetID();
+        cmd->id     = id;
     }
 }
 
@@ -1168,19 +1149,34 @@ void GLDeferredCommandBuffer::BindBuffersBase(const GLBufferTarget bufferTarget,
             cmd->target = bufferTarget;
             cmd->first  = first;
             cmd->count  = static_cast<GLsizei>(count);
-            auto bufferIDs = reinterpret_cast<GLuint*>(cmd + 1);
-            for (std::uint32_t i = 0; i < count; ++i)
+            GLuint* bufferIDs = reinterpret_cast<GLuint*>(cmd + 1);
+            if (buffers != nullptr)
             {
-                auto bufferGL = LLGL_CAST(const GLBuffer*, buffers[i]);
-                bufferIDs[i] = bufferGL->GetID();
+                for_range(i, count)
+                {
+                    if (buffers[i] != nullptr)
+                    {
+                        auto* bufferGL = LLGL_CAST(const GLBuffer*, buffers[i]);
+                        bufferIDs[i] = bufferGL->GetID();
+                    }
+                    else
+                        bufferIDs[i] = 0;
+                }
             }
+            else
+                Memory::Memset(bufferIDs, 0u, count);
         }
     }
     else if (count == 1)
     {
         /* Encode as single binding with <BindBufferBase> */
-        auto bufferGL = LLGL_CAST(const GLBuffer*, buffers[0]);
-        BindBufferBase(bufferTarget, *bufferGL, first);
+        if (buffers != nullptr && buffers[0] != nullptr)
+        {
+            auto* bufferGL = LLGL_CAST(const GLBuffer*, buffers[0]);
+            BindBufferBase(bufferTarget, bufferGL->GetID(), first);
+        }
+        else
+            BindBufferBase(bufferTarget, 0, first);
     }
 }
 
@@ -1243,6 +1239,47 @@ void GLDeferredCommandBuffer::FlushMemoryBarriers()
     }
 }
 
+void GLDeferredCommandBuffer::FlushBindVertexArray()
+{
+    if (GLSharedContextVertexArray* vertexArray = FlushVertexInput())
+    {
+        auto cmd = AllocCommand<GLCmdBindVertexArray>(GLOpcodeBindVertexArray);
+        cmd->vertexArray = vertexArray;
+    }
+}
+
+void GLDeferredCommandBuffer::FlushDeferredShaderPipeline()
+{
+    /*
+    If GL_ARB_clip_control is supported, there's no need for deferred shader pipelines (yet). See GLShader::NeedsPermutationFlippedYPosition().
+    Only do this check for the deferred command buffer as an optimization to avoid spamming the virtual command stream with unnecessary commands.
+    */
+    static_assert(GLShader::PermutationCount == 2, "if more entries to GLShader::Permutation are added, this assumption must be re-evaluated");
+    if (!HasExtension(GLExt::ARB_clip_control))
+        AllocOpcode(GLOpcodeFlushDeferredShaderPipeline);
+}
+
+#if LLGL_GLEXT_MEMORY_BARRIERS
+#   define LLGL_FLUSH_MEMORY_BARRIERS() \
+        FlushMemoryBarriers()
+#else
+#   define LLGL_FLUSH_MEMORY_BARRIERS()
+#endif // /LLGL_GLEXT_MEMORY_BARRIERS
+
+void GLDeferredCommandBuffer::FlushDrawCommandStates()
+{
+    FlushDeferredShaderPipeline();
+    FlushBindVertexArray();
+    LLGL_FLUSH_MEMORY_BARRIERS();
+}
+
+void GLDeferredCommandBuffer::FlushComputeCommandStates()
+{
+    LLGL_FLUSH_MEMORY_BARRIERS();
+}
+
+#undef LLGL_FLUSH_MEMORY_BARRIERS
+
 void GLDeferredCommandBuffer::AllocOpcode(const GLOpcode opcode)
 {
     buffer_.AllocOpcode(opcode);
@@ -1253,9 +1290,6 @@ TCommand* GLDeferredCommandBuffer::AllocCommand(const GLOpcode opcode, std::size
 {
     return buffer_.AllocCommand<TCommand>(opcode, payloadSize);
 }
-
-
-#undef LLGL_FLUSH_MEMORY_BARRIERS
 
 
 } // /namespace LLGL

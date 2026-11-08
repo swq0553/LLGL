@@ -2,7 +2,8 @@
 
 <p align="center">
     <a href="https://github.com/LukasBanana/LLGL/blob/master/LICENSE.txt"><img alt="License" src="https://img.shields.io/badge/license-BSD--3%20clause-blue.svg" /></a>
-    <a href="https://discord.gg/JT4dZ3CgJZ"><img alt="Discord" src="https://img.shields.io/discord/1257440130021457941?logo=discord&logoColor=white"></a?>
+    <a href="https://discord.gg/JT4dZ3CgJZ"><img alt="Discord" src="https://img.shields.io/discord/1257440130021457941?logo=discord&logoColor=white"></a>
+    <a href="https://llgl.sourceforge.io/docu/html/"><img alt="Doxygen Docs" src="https://img.shields.io/badge/doxygen-%232C4AA8.svg"></a>
 </p>
 
 <p align="center"><img src="docu/LLGL_Logo.png"/></p>
@@ -17,13 +18,12 @@ The library is written mostly in C++11 with the addition of a C99, C# 6.0, and G
 
 ## Documentation
 
-- **Version**: 0.05 Beta (see [ChangeLog](docu/ChangeLog))
-- [Getting Started with LLGL](docu/GettingStarted/Getting%20Started%20with%20LLGL.pdf) (PDF)
-with Introduction, Hello Triangle Tutorial, and Extensibility Example with [GLFW](http://www.glfw.org/)
-- [LLGL Reference Manual](docu/refman.pdf) (PDF)
-- [LLGL Coding Conventions](docu/CodingConventions/Coding%20Conventions%20for%20LLGL.pdf) (PDF)
-- [C++ Examples and Tutorials](examples/Cpp)
-- [C99 Examples](examples/C99)
+- **Version**: 0.05 Beta (see [ChangeLog](docu/ChangeLog/README.md))
+- [Getting Started with LLGL](docu/GettingStarted/README.md)
+- [LLGL Reference Manual](https://llgl.sourceforge.io/docu/html/) (Doxygen)
+- [LLGL Coding Conventions](docu/CodingConventions/README.md)
+- [C++ Examples and Tutorials](examples/Cpp/README.md)
+- [C99 Examples](examples/C99/README.md)
 - [C# Examples](examples/CSharp)
 - [Go Examples](examples/Go)
 - [WebGL Examples](https://lukasbanana.github.io/LLGL/docu/WebPage)
@@ -33,12 +33,12 @@ with Introduction, Hello Triangle Tutorial, and Extensibility Example with [GLFW
 
 | Platform | CI | D3D12 | D3D11 | Vulkan | OpenGL | Metal |
 |----------|:--:|:-----:|:-----:|:------:|:------:|:-----:|
-| <img src="docu/Icons/windows.svg" height="20" /> Windows | <p>[![MSVC16+ CI](https://github.com/LukasBanana/LLGL/actions/workflows/ci_windows.yml/badge.svg)](https://github.com/LukasBanana/LLGL/actions/workflows/ci_windows.yml)</p> <p>[![MSVC14 CI](https://ci.appveyor.com/api/projects/status/j09x8n07u3byfky0?svg=true)](https://ci.appveyor.com/project/LukasBanana/llgl)</p> | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | N/A |
+| <img src="docu/Icons/windows.svg" height="20" /> Windows | <p>[![MSVC16+ CI](https://github.com/LukasBanana/LLGL/actions/workflows/ci_windows.yml/badge.svg)](https://github.com/LukasBanana/LLGL/actions/workflows/ci_windows.yml)</p> <p>[![MSVC14 CI](https://img.shields.io/appveyor/build/LukasBanana/llgl?logo=appveyor&label=MS%20Windows%20%28MSVC%2014%29)](https://ci.appveyor.com/project/LukasBanana/llgl)</p> | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | N/A |
 | <img src="docu/Icons/uwp.svg" height="20" /> UWP | [![UWP CI](https://github.com/LukasBanana/LLGL/actions/workflows/ci_uwp.yml/badge.svg)](https://github.com/LukasBanana/LLGL/actions/workflows/ci_uwp.yml) | :heavy_check_mark: | :heavy_check_mark: | N/A | N/A | N/A |
 | <img src="docu/Icons/linux.svg" height="20" /> GNU/Linux | [![GNU/Linux CI](https://github.com/LukasBanana/LLGL/actions/workflows/ci_linux.yml/badge.svg)](https://github.com/LukasBanana/LLGL/actions/workflows/ci_linux.yml) | N/A | N/A | :heavy_check_mark: | :heavy_check_mark: | N/A |
 | <img src="docu/Icons/macos.svg" height="20" /> macOS | [![macOS CI](https://github.com/LukasBanana/LLGL/actions/workflows/ci_macos.yml/badge.svg)](https://github.com/LukasBanana/LLGL/actions/workflows/ci_macos.yml) | N/A | N/A | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: |
 | <img src="docu/Icons/ios.svg" height="20" /> iOS | [![iOS CI](https://github.com/LukasBanana/LLGL/actions/workflows/ci_ios.yml/badge.svg)](https://github.com/LukasBanana/LLGL/actions/workflows/ci_ios.yml) | N/A | N/A | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: |
-| <img src="docu/Icons/android.svg" height="20" /> Android | [![Android CI](https://github.com/LukasBanana/LLGL/actions/workflows/ci_android.yml/badge.svg)](https://github.com/LukasBanana/LLGL/actions/workflows/ci_android.yml) | N/A | N/A | :construction: | :heavy_check_mark: | N/A |
+| <img src="docu/Icons/android.svg" height="20" /> Android | [![Android CI](https://github.com/LukasBanana/LLGL/actions/workflows/ci_android.yml/badge.svg)](https://github.com/LukasBanana/LLGL/actions/workflows/ci_android.yml) | N/A | N/A | :heavy_check_mark: | :heavy_check_mark: | N/A |
 | <img src="docu/Icons/wasm.svg" height="20" /> Wasm | [![WebAssembly CI](https://github.com/LukasBanana/LLGL/actions/workflows/ci_wasm.yml/badge.svg)](https://github.com/LukasBanana/LLGL/actions/workflows/ci_wasm.yml) | N/A | N/A | N/A | :heavy_check_mark: | N/A |
 | <img src="docu/Icons/cmake.svg" height="20" /> CMake/Unity | [![Unity Build CI](https://github.com/LukasBanana/LLGL/actions/workflows/ci_unity.yml/badge.svg)](https://github.com/LukasBanana/LLGL/actions/workflows/ci_unity.yml) | | | | | |
 
@@ -84,17 +84,16 @@ The LLGL port in vcpkg is kept up to date by Microsoft team members and communit
 ## Showcase
 
 <p align="center">
-    <img src="examples/Cpp/PostProcessing/Example.png" alt="Screenshot missing: Post processing example" style="width:300px;height:auto;">
-    <img src="examples/Cpp/ShadowMapping/Example.png" alt="Screenshot missing: Shadow mapping example" style="width:300px;height:auto;">
+    <img src="examples/Cpp/PostProcessing/Example.png" alt="Post processing example" style="width:300px;height:auto;">
+    <img src="examples/Cpp/ShadowMapping/Example.png" alt="Shadow mapping example" style="width:300px;height:auto;">
 </p>
 
 <p align="center">
-    <img src="examples/Cpp/PBR/Example.png" alt="Screenshot missing: PBR example" style="width:300px;height:auto;">
-    <img src="examples/Cpp/ClothPhysics/Example.gif" alt="Screenshot missing: Cloth physics example" style="width:300px;height:auto;">
+    <img src="examples/Cpp/PBR/Example.png" alt="PBR example" style="width:300px;height:auto;">
+    <img src="examples/Cpp/ClothPhysics/Example.gif" alt="Cloth physics example" style="width:300px;height:auto;">
 </p>
 
 <p align="center">
-    <img src="examples/Cpp/Fonts/Example.iOS.png" alt="Screenshot missing: Fonts example (iOS)" style="height:400px;width:auto;">
-    <img src="examples/Cpp/ClothPhysics/Example.iOS.png" alt="Screenshot missing: Cloth physics example (iOS)" style="height:400px;width:auto;">
+    <img src="docu/Showcase/Showcase_HelloGame_Android.jpg" alt="HelloGame example (Android)" style="width:600px;height:auto;">
 </p>
 

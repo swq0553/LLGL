@@ -70,26 +70,43 @@ static std::vector<ShadingLanguage> GLQueryShadingLanguages(GLint version)
 }
 
 //TODO
+static void GetDefaultSupportedGLBaseFormats(std::vector<Format>& formats)
+{
+    formats.insert(
+        formats.end(),
+        {
+            Format::R8UNorm,            Format::R8SNorm,            Format::R8UInt,             Format::R8SInt,
+            Format::R16UNorm,           Format::R16SNorm,           Format::R16UInt,            Format::R16SInt,            Format::R16Float,
+            Format::R32UInt,            Format::R32SInt,            Format::R32Float,
+            Format::RG8UNorm,           Format::RG8SNorm,           Format::RG8UInt,            Format::RG8SInt,
+            Format::RG16UNorm,          Format::RG16SNorm,          Format::RG16UInt,           Format::RG16SInt,           Format::RG16Float,
+            Format::RG32UInt,           Format::RG32SInt,           Format::RG32Float,
+            Format::RGB8UNorm,          Format::RGB8SNorm,          Format::RGB8UInt,           Format::RGB8SInt,
+            Format::RGB16UNorm,         Format::RGB16SNorm,         Format::RGB16UInt,          Format::RGB16SInt,          Format::RGB16Float,
+            Format::RGB32UInt,          Format::RGB32SInt,          Format::RGB32Float,
+            Format::RGBA8UNorm,         Format::RGBA8SNorm,         Format::RGBA8UInt,          Format::RGBA8SInt,
+            Format::RGBA16UNorm,        Format::RGBA16SNorm,        Format::RGBA16UInt,         Format::RGBA16SInt,         Format::RGBA16Float,
+            Format::RGBA32UInt,         Format::RGBA32SInt,         Format::RGBA32Float,
+        }
+    );
+}
+
 static std::vector<Format> GetDefaultSupportedGLTextureFormats()
 {
-    return
+    std::vector<Format> textureFormats =
     {
         Format::A8UNorm,
-        Format::R8UNorm,            Format::R8SNorm,            Format::R8UInt,             Format::R8SInt,
-        Format::R16UNorm,           Format::R16SNorm,           Format::R16UInt,            Format::R16SInt,            Format::R16Float,
-        Format::R32UInt,            Format::R32SInt,            Format::R32Float,
-        Format::RG8UNorm,           Format::RG8SNorm,           Format::RG8UInt,            Format::RG8SInt,
-        Format::RG16UNorm,          Format::RG16SNorm,          Format::RG16UInt,           Format::RG16SInt,           Format::RG16Float,
-        Format::RG32UInt,           Format::RG32SInt,           Format::RG32Float,
-        Format::RGB8UNorm,          Format::RGB8SNorm,          Format::RGB8UInt,           Format::RGB8SInt,
-        Format::RGB16UNorm,         Format::RGB16SNorm,         Format::RGB16UInt,          Format::RGB16SInt,          Format::RGB16Float,
-        Format::RGB32UInt,          Format::RGB32SInt,          Format::RGB32Float,
-        Format::RGBA8UNorm,         Format::RGBA8SNorm,         Format::RGBA8UInt,          Format::RGBA8SInt,
-        Format::RGBA16UNorm,        Format::RGBA16SNorm,        Format::RGBA16UInt,         Format::RGBA16SInt,         Format::RGBA16Float,
-        Format::RGBA32UInt,         Format::RGBA32SInt,         Format::RGBA32Float,
-        Format::BGRA8UNorm,         Format::BGRA8UNorm_sRGB,    Format::BGRA8SNorm,         Format::BGRA8UInt,          Format::BGRA8SInt,
         Format::D16UNorm,           Format::D32Float,           Format::D24UNormS8UInt,     Format::D32FloatS8X24UInt,
     };
+    GetDefaultSupportedGLBaseFormats(textureFormats);
+    return textureFormats;
+}
+
+static std::vector<Format> GLGetSupportedVertexFormats()
+{
+    std::vector<Format> vertexFormats;
+    GetDefaultSupportedGLBaseFormats(vertexFormats);
+    return vertexFormats;
 }
 
 static void GLGetRenderingAttribs(RenderingCapabilities& caps, GLint version)
@@ -104,21 +121,7 @@ static void GLGetSupportedTextureFormats(std::vector<Format>& textureFormats)
 {
     textureFormats = GetDefaultSupportedGLTextureFormats();
 
-    /*RemoveAllFromListIf(
-        textureFormats,
-        [](Format format) -> bool
-        {
-            if (auto internalformat = GLTypes::MapOrZero(format))
-            {
-                GLint supported = 0;
-                glGetInternalformativ(GL_TEXTURE_2D, internalformat, GL_INTERNALFORMAT_SUPPORTED, 1, &supported);
-                return (supported == GL_FALSE);
-            }
-            return true;
-        }
-    );*/
-
-    const auto numCompressedTexFormats = GLGetUInt(GL_NUM_COMPRESSED_TEXTURE_FORMATS);
+    const std::uint32_t numCompressedTexFormats = GLGetUInt(GL_NUM_COMPRESSED_TEXTURE_FORMATS);
 
     std::vector<GLint> compressedTexFormats(numCompressedTexFormats);
     glGetIntegerv(GL_COMPRESSED_TEXTURE_FORMATS, compressedTexFormats.data());
@@ -133,13 +136,13 @@ static void GLGetSupportedTextureFormats(std::vector<Format>& textureFormats)
 
 static void GLGetSupportedFeatures(RenderingFeatures& features, GLint version)
 {
-    /* Query all boolean capabilies by their respective OpenGL extension */
+    /* Query all boolean capabilities by their respective OpenGL extension */
     features.hasRenderTargets               = true;             // GLES 2.0
     features.has3DTextures                  = true;             // GLES 2.0
     features.hasCubeTextures                = true;             // GLES 2.0
     features.hasArrayTextures               = true;             // GLES 2.0
     features.hasCubeArrayTextures           = false;
-    features.hasMultiSampleTextures         = false;
+    features.hasMultiSampleTextures         = (version >= 300); // GLES 3.0 (only for multi-sampled *renderbuffers*)
     features.hasTextureViews                = false;
     features.hasTextureViewSwizzle          = false;
     features.hasBufferViews                 = (version >= 300); // GLES 3.0
@@ -156,6 +159,7 @@ static void GLGetSupportedFeatures(RenderingFeatures& features, GLint version)
     features.hasConservativeRasterization   = false;
     features.hasStreamOutputs               = (version >= 300); // GLES 3.0
     features.hasLogicOp                     = false;
+    features.hasDepthStencilResolve         = (version >= 300); // GLES 3.0
     features.hasPipelineCaching             = false;
     features.hasPipelineStatistics          = false;
     features.hasRenderCondition             = false;
@@ -203,6 +207,7 @@ static void GLGetFeatureLimits(RenderingLimits& limits, GLint version)
     /* Determine maximum buffer size to maximum value for <GLsizei> (used in 'glBufferData') */
     limits.maxBufferSize                    = static_cast<std::uint64_t>(std::numeric_limits<GLsizeiptr>::max());
     limits.maxConstantBufferSize            = static_cast<std::uint64_t>(GLGetUInt(GL_MAX_UNIFORM_BLOCK_SIZE));
+    limits.maxVertexBufferInputs            = static_cast<std::uint32_t>(GLGetUInt(GL_MAX_VERTEX_ATTRIBS));
 
     /* Presume that at least one stream-output is supported */
     limits.maxStreamOutputs                 = 1u;
@@ -234,6 +239,9 @@ void GLQueryRenderingCaps(RenderingCapabilities& caps)
     const GLint version = GetGLESVersion();
     GLGetRenderingAttribs(caps, version);
     GLGetSupportedTextureFormats(caps.textureFormats);
+    caps.vertexFormats                  = GLGetSupportedVertexFormats();
+    caps.swapChainColorFormats          = GLGetSupportedSwapChainColorFormats();
+    caps.swapChainDepthStencilFormats   = GLGetSupportedSwapChainDepthStencilFormats();
     GLGetSupportedFeatures(caps.features, version);
     GLGetFeatureLimits(caps.limits, version);
     GLGetTextureLimits(caps.features, caps.limits, version);

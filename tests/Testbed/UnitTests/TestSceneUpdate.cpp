@@ -35,6 +35,7 @@ DEF_TEST( SceneUpdate )
         {
             psoDesc.pipelineLayout      = layouts[PipelineSolid];
             psoDesc.renderPass          = swapChain->GetRenderPass();
+            psoDesc.inputVertexAttribs  = vertexFormats[VertFmtStd].attributes;
             psoDesc.vertexShader        = shaders[VSSolid];
             psoDesc.fragmentShader      = shaders[PSSolid];
             psoDesc.depth.testEnabled   = true;
@@ -90,7 +91,7 @@ DEF_TEST( SceneUpdate )
                 : semiRandomRotations[i % (sizeof(semiRandomRotations)/sizeof(semiRandomRotations[0]))]
         );
 
-        cmdBuffer->Begin();
+        BEGIN();
         {
             // Graphics can be set inside and outside a render pass, so test binding this PSO outside the render pass
             cmdBuffer->SetVertexBuffer(*meshBuffer);
@@ -128,7 +129,7 @@ DEF_TEST( SceneUpdate )
             }
             cmdBuffer->EndRenderPass();
         }
-        cmdBuffer->End();
+        END();
     }
 
     // Match entire color buffer and create delta heat map

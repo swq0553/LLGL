@@ -10,6 +10,7 @@
 
 
 #include "D3D12RenderPSOBase.h"
+#include "../../../Core/LinearStringContainer.h"
 
 
 namespace LLGL
@@ -33,6 +34,21 @@ class D3D12GraphicsPSO final : public D3D12RenderPSOBase
         // Binds this graphics PSO to the specified command context.
         void Bind(D3D12CommandContext& commandContext) override;
 
+    public:
+
+        static void BuildInputLayout(
+            LLGL::ArrayView<VertexAttribute> attributes,
+            LLGL::DynamicVector<D3D12_INPUT_ELEMENT_DESC>& output,
+            LinearStringContainer& vertexAttribNames
+        );
+
+        static void BuildStreamOutput(
+            LLGL::ArrayView<VertexAttribute> attributes,
+            LLGL::DynamicVector<D3D12_SO_DECLARATION_ENTRY>& output,
+            LLGL::DynamicVector<UINT>& bufferStrides,
+            LinearStringContainer& vertexAttribNames
+        );
+
     private:
 
         void CreateNativePSO(
@@ -44,6 +60,23 @@ class D3D12GraphicsPSO final : public D3D12RenderPSOBase
         );
 
         ComPtr<ID3D12PipelineState> CreateNativePSOWithDesc(ID3D12Device* device, const D3D12_GRAPHICS_PIPELINE_STATE_DESC& desc, const char* debugName);
+
+        #if LLGL_D3D12_ENABLE_FEATURELEVEL >= 1
+        /*
+        Creates a view-instanced PSO (single-pass layered/multiview rendering) from an equivalent graphics PSO
+        descriptor. View instance i is routed to render-target array index i, and the shader reads SV_ViewID
+        (SystemValue::ViewIndex) to index per-view data. Requires the stream-based pipeline state API (ID3D12Device2,
+        VIEW_INSTANCING subobject) from a newer Windows SDK, which is why this path is gated on
+        LLGL_D3D12_ENABLE_FEATURELEVEL. The SV_ViewID shaders themselves need Shader Model 6.1, but may be compiled
+        externally, so this is intentionally not gated on LLGL_D3D12_ENABLE_DXCOMPILER.
+        */
+        ComPtr<ID3D12PipelineState> CreateNativePSOWithStreamDesc(
+            ID3D12Device2*                              device,
+            const D3D12_GRAPHICS_PIPELINE_STATE_DESC&   desc,
+            UINT                                        numViews,
+            const char*                                 debugName
+        );
+        #endif // /LLGL_D3D12_ENABLE_FEATURELEVEL
 
     private:
 

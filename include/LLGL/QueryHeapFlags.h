@@ -38,7 +38,7 @@ enum class QueryType
     TimeElapsed,
 
     /**
-    \breif Number of vertices that have been written into a stream output (also called "Transform Feedback").
+    \brief Number of vertices that have been written into a stream output (also called "Transform Feedback").
     \remarks If this query is not generated inside a stream-output section,
     i.e. between CommandBuffer::BeginStreamOutput and CommandBuffer::EndStreamOutput, the result is undefined.
     */
@@ -117,7 +117,7 @@ struct QueryHeapDescriptor
     /**
     \brief Optional name for debugging purposes. By default null.
     \remarks The final name of the native hardware resource is implementation defined.
-    \see RenderSystemChild::SetName
+    \see RenderSystemChild::SetDebugName
     */
     const char*     debugName       = nullptr;
 

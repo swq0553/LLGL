@@ -32,34 +32,16 @@ namespace LLGL
 
 
 // Returns true if a GL renderbuffer is sufficient for a texture with the specified bind flags
-static bool IsRenderbufferSufficient(const TextureDescriptor& desc)
+static bool IsRenderbufferSufficient(const TextureDescriptor& textureDesc)
 {
     /*
     Renderbuffers can only be used under the following conditions:
-    - Texture must be 2D or 2D-multisampled
-    - Only a single MIP-map level
-    - Only used as attachment
-    - No initial image data is specified
+    - Only used as attachment, with a single MIP-map level and no initial image data
+      (shared with the other backends, see IsAttachmentOnlyTexture)
+    - Texture must be 2D or 2D-multisampled, since a renderbuffer has no array layers
     */
-    const long attachmentBindFlags =
-    (
-        desc.bindFlags &
-        (
-            BindFlags::Sampled                  |
-            BindFlags::Storage                  |
-            BindFlags::ColorAttachment          |
-            BindFlags::DepthStencilAttachment   |
-            BindFlags::CopySrc                  |
-            BindFlags::CopyDst
-        )
-    );
-    return
-    (
-        desc.mipLevels == 1 &&
-        (desc.type == TextureType::Texture2D || desc.type == TextureType::Texture2DMS) &&
-        (attachmentBindFlags == BindFlags::ColorAttachment || attachmentBindFlags == BindFlags::DepthStencilAttachment) &&
-        ((desc.miscFlags & MiscFlags::NoInitialData) != 0)
-    );
+    const bool isTexture2Dor2DMS = (textureDesc.type == TextureType::Texture2D || textureDesc.type == TextureType::Texture2DMS);
+    return isTexture2Dor2DMS && IsAttachmentOnlyTexture(textureDesc);
 }
 
 // Maps the specified format to a swizzle format, or identity swizzle if texture swizzling is not necessary
@@ -71,6 +53,8 @@ static GLSwizzleFormat MapToGLSwizzleFormat(const Format format)
     const auto& formatDesc = GetFormatAttribs(format);
     if (formatDesc.format == ImageFormat::Alpha)
         return GLSwizzleFormat::Alpha;
+    else if (formatDesc.format == ImageFormat::BGR)
+        return GLSwizzleFormat::BGR;
     else if (formatDesc.format == ImageFormat::BGRA)
         return GLSwizzleFormat::BGRA;
     else
@@ -309,6 +293,7 @@ static Format MapGLSwizzleFormat(const Format format, const GLSwizzleFormat swiz
     switch (swizzle)
     {
         case GLSwizzleFormat::Alpha:    return MapGLSwizzleFormatAlpha(format);
+        case GLSwizzleFormat::BGR:      return format; // GL_RGB565 is only used for B5G6R5UNorm, so it's unmapped correctly already
         case GLSwizzleFormat::BGRA:     return MapGLSwizzleFormatBGRA(format);
         default:                        return format;
     }
@@ -360,6 +345,29 @@ static TextureSwizzleRGBA GetTextureSwizzlePermutationBGRA(const TextureSwizzleR
     return permutation;
 }
 
+static TextureSwizzle GetTextureSwizzlePermutationBGRComponent(const TextureSwizzle swizzleComponent)
+{
+    switch (swizzleComponent)
+    {
+        case TextureSwizzle::Red:   return TextureSwizzle::Blue;    // Swap red with blue component
+        case TextureSwizzle::Blue:  return TextureSwizzle::Red;     // Swap blue with red component
+        case TextureSwizzle::Alpha: return TextureSwizzle::One;     // No alpha component, so read one like other backends
+        default:                    return swizzleComponent;        // Use input value for all other components
+    }
+}
+
+static TextureSwizzleRGBA GetTextureSwizzlePermutationBGR(const TextureSwizzleRGBA& swizzle)
+{
+    TextureSwizzleRGBA permutation;
+    {
+        permutation.r = GetTextureSwizzlePermutationBGRComponent(swizzle.r);
+        permutation.g = GetTextureSwizzlePermutationBGRComponent(swizzle.g);
+        permutation.b = GetTextureSwizzlePermutationBGRComponent(swizzle.b);
+        permutation.a = TextureSwizzle::One;                            // BGR formats have no alpha component
+    }
+    return permutation;
+}
+
 // Maps the TextureSwizzleRGBA::a component to a different value for the "Alpha" swizzle format
 static TextureSwizzle GetTextureSwizzlePermutationAlphaComponent(const TextureSwizzle swizzleAlpha)
 {
@@ -386,14 +394,14 @@ static TextureSwizzleRGBA GetTextureSwizzlePermutationAlpha(const TextureSwizzle
 
 static void InitializeGLTextureSwizzle(GLenum target, const TextureSwizzleRGBA& swizzle)
 {
-    #if !LLGL_GL_ENABLE_OPENGL2X
-    glTexParameteri(target, GL_TEXTURE_SWIZZLE_R, GLTypes::Map(swizzle.r));
-    glTexParameteri(target, GL_TEXTURE_SWIZZLE_G, GLTypes::Map(swizzle.g));
-    glTexParameteri(target, GL_TEXTURE_SWIZZLE_B, GLTypes::Map(swizzle.b));
-    glTexParameteri(target, GL_TEXTURE_SWIZZLE_A, GLTypes::Map(swizzle.a));
-    #else
-    LLGL_ASSERT(IsTextureSwizzleIdentity(swizzle), "texture component swizzling not supported in GL 2.x");
-    #endif
+    const GLint swizzleParams[4] =
+    {
+        static_cast<GLint>(GLTypes::Map(swizzle.r)),
+        static_cast<GLint>(GLTypes::Map(swizzle.g)),
+        static_cast<GLint>(GLTypes::Map(swizzle.b)),
+        static_cast<GLint>(GLTypes::Map(swizzle.a)),
+    };
+    GLProfile::TexParameterSwizzleRGBA(target, swizzleParams);
 }
 
 static void InitializeGLTextureSwizzleWithFormat(
@@ -412,6 +420,10 @@ static void InitializeGLTextureSwizzleWithFormat(
     {
         case GLSwizzleFormat::RGBA:
             InitializeGLTextureSwizzle(target, swizzle);
+            break;
+
+        case GLSwizzleFormat::BGR:
+            InitializeGLTextureSwizzle(target, GetTextureSwizzlePermutationBGR(swizzle));
             break;
 
         case GLSwizzleFormat::BGRA:
@@ -439,7 +451,7 @@ void GLTexture::TexParameterSwizzle(
 
 #ifdef GL_ARB_copy_image
 
-// For glCopyImageSubData, the array lazer is always specified in the Z-coordinate
+// For glCopyImageSubData, the array layer is always specified in the Z-coordinate
 static Offset3D ToGLArrayTextureOffset(TextureType type, const Offset3D& offset)
 {
     if (type == TextureType::Texture1DArray)
@@ -658,7 +670,7 @@ static void GLReadPixelsFromTexture(
 
         case TextureType::Texture1DArray:
         {
-            const std::size_t imageLayerStride = dstImageView.dataSize / extent.height; //TODO: calcualte required size independently of input 'dataSize'
+            const std::size_t imageLayerStride = dstImageView.dataSize / extent.height; //TODO: calculate required size independently of input 'dataSize'
             for_range(y, extent.height)
             {
                 ReadFramebufferAttachTexture(srcTexture, srcLevel, srcOffset.y + y);
@@ -694,7 +706,7 @@ static void GLReadPixelsFromTexture(
 
         case TextureType::TextureCube:
         {
-            const std::size_t imageLayerStride = dstImageView.dataSize / extent.depth; //TODO: calcualte required size independently of input 'dataSize'
+            const std::size_t imageLayerStride = dstImageView.dataSize / extent.depth; //TODO: calculate required size independently of input 'dataSize'
             for_range(z, extent.depth)
             {
                 ReadFramebufferAttachTexture(srcTexture, srcLevel, srcOffset.z + z);
@@ -717,7 +729,7 @@ static void GLReadPixelsFromTexture(
         case TextureType::Texture2DMSArray:
         case TextureType::TextureCubeArray:
         {
-            const std::size_t imageLayerStride = dstImageView.dataSize / extent.depth; //TODO: calcualte required size independently of input 'dataSize'
+            const std::size_t imageLayerStride = dstImageView.dataSize / extent.depth; //TODO: calculate required size independently of input 'dataSize'
             for_range(z, extent.depth)
             {
                 ReadFramebufferAttachTexture(srcTexture, srcLevel, srcOffset.z + z);
@@ -881,7 +893,11 @@ void GLTexture::TextureSubImage(const TextureRegion& region, const ImageView& sr
 {
     if (!IsRenderbuffer())
     {
-        const GLuint srcRowLength = GetGLRowLengthOrZero(srcImageView);
+        /* Convert initial image data for texture swizzle formats */
+        GLImageViewConverter imageViewConverter{ &srcImageView, GetSwizzleFormat() };
+        const ImageView& imageView = *imageViewConverter.GetView();
+
+        const GLuint srcRowLength = GetGLRowLengthOrZero(imageView);
 
         GLStateManager::Get().SetPixelStoreUnpack(srcRowLength, region.extent.height, 1);
         {
@@ -889,7 +905,7 @@ void GLTexture::TextureSubImage(const TextureRegion& region, const ImageView& sr
             if (HasExtension(GLExt::ARB_direct_state_access))
             {
                 /* Transfer image data directly to GL texture */
-                GLTextureSubImage(GetID(), GetType(), region, srcImageView, GetGLInternalFormat());
+                GLTextureSubImage(GetID(), GetType(), region, imageView, GetGLInternalFormat());
             }
             else
             #endif // /LLGL_GLEXT_DIRECT_STATE_ACCESS
@@ -901,7 +917,7 @@ void GLTexture::TextureSubImage(const TextureRegion& region, const ImageView& sr
                     GLStateManager::Get().PushBoundTexture(target);
                     {
                         GLStateManager::Get().BindTexture(target, GetID());
-                        GLTexSubImage(GetType(), region, srcImageView, GetGLInternalFormat());
+                        GLTexSubImage(GetType(), region, imageView, GetGLInternalFormat());
                     }
                     GLStateManager::Get().PopBoundTexture();
                 }
@@ -909,7 +925,7 @@ void GLTexture::TextureSubImage(const TextureRegion& region, const ImageView& sr
                 {
                     /* Bind texture and transfer image data to GL texture */
                     GLStateManager::Get().BindTexture(target, GetID());
-                    GLTexSubImage(GetType(), region, srcImageView, GetGLInternalFormat());
+                    GLTexSubImage(GetType(), region, imageView, GetGLInternalFormat());
                 }
             }
         }
@@ -1224,29 +1240,27 @@ void GLTexture::BindTexParameters(const GLEmulatedSampler& sampler)
  * ======= Private: =======
  */
 
+static bool IsTextureFormatFilterable(Format format)
+{
+    return !(IsIntegerFormat(format) || IsDepthOrStencilFormat(format));
+}
+
 static GLint GetInitialGlTextureMinFilter(const TextureDescriptor& textureDesc)
 {
     /* Integral texture formats cannot use linear samplers */
-    if (IsIntegerFormat(textureDesc.format))
-        return (IsMipMappedTexture(textureDesc) ? GL_NEAREST_MIPMAP_NEAREST : GL_NEAREST);
-    else
+    if (IsTextureFormatFilterable(textureDesc.format))
         return (IsMipMappedTexture(textureDesc) ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR);
+    else
+        return (IsMipMappedTexture(textureDesc) ? GL_NEAREST_MIPMAP_NEAREST : GL_NEAREST);
 }
 
 static GLint GetInitialGlTextureMagFilter(const TextureDescriptor& textureDesc)
 {
     /* Integral texture formats cannot use linear samplers */
-    return (IsIntegerFormat(textureDesc.format) ? GL_NEAREST : GL_LINEAR);
-}
-
-static ImageFormat MapSwizzleImageFormat(const ImageFormat format)
-{
-    switch (format)
-    {
-        case ImageFormat::RGBA: return ImageFormat::BGRA;
-        case ImageFormat::RGB:  return ImageFormat::BGR;
-        default:                return format;
-    }
+    if (IsTextureFormatFilterable(textureDesc.format))
+        return GL_LINEAR;
+    else
+        return GL_NEAREST;
 }
 
 // Binds the specified GL texture temporarily. Only used to gather texture information, not to bind texture for the graphics or compute pipeline.
@@ -1283,25 +1297,18 @@ void GLTexture::AllocTextureStorage(const TextureDescriptor& textureDesc, const 
     GLStateManager::Get().BindGLTexture(*this);
 
     /* Convert initial image data for texture swizzle formats */
-    ImageView intermediateImageView;
+    GLImageViewConverter imageViewConverter{ initialImage, GetSwizzleFormat() };
+    const ImageView* imageView = imageViewConverter.GetView();
 
-    if (initialImage != nullptr)
+    if (imageView != nullptr)
     {
-        /* Re-map image format if texture format must be emulated with component swizzling */
-        if (GetSwizzleFormat() == GLSwizzleFormat::BGRA)
-        {
-            intermediateImageView = *initialImage;
-            intermediateImageView.format = MapSwizzleImageFormat(initialImage->format);
-            initialImage = &intermediateImageView;
-        }
-
-        const GLuint srcRowLength = GetGLRowLengthOrZero(*initialImage);
+        const GLuint srcRowLength = GetGLRowLengthOrZero(*imageView);
         GLStateManager::Get().SetPixelStoreUnpack(srcRowLength, textureDesc.extent.height, 1);
     }
 
     /* Build texture storage and upload image dataa */
     //GLStateManager::Get().BindBuffer(GLBufferTarget::PIXEL_UNPACK_BUFFER, 0);
-    GLTexImage(textureDesc, initialImage);
+    GLTexImage(textureDesc, imageView);
 
     /* Store internal GL format. Only desktop OpenGL can query the actual internal format. For GLES 3.0 and WebGL 2.0 we have to rely on the input format. */
     #if LLGL_OPENGL || GL_ES_VERSION_3_1
@@ -1314,8 +1321,19 @@ void GLTexture::AllocTextureStorage(const TextureDescriptor& textureDesc, const 
     if (!IsMultiSampleTexture(textureDesc.type))
     {
         GLenum target = GLTypes::Map(textureDesc.type);
+
         glTexParameteri(target, GL_TEXTURE_MIN_FILTER, GetInitialGlTextureMinFilter(textureDesc));
         glTexParameteri(target, GL_TEXTURE_MAG_FILTER, GetInitialGlTextureMagFilter(textureDesc));
+
+        if (textureDesc.mipLevels == 1)
+        {
+            /*
+            Explicitly disable all MIP-map filtering texture parameters if the texture is created without MIP-maps.
+            This marks textures with a single MIP-map as complete and WebGL implementations can be very pedantic about this.
+            */
+            glTexParameteri(target, GL_TEXTURE_BASE_LEVEL, 0);
+            glTexParameteri(target, GL_TEXTURE_MAX_LEVEL, 0);
+        }
     }
 
     /* Configure texture swizzling if format is not supported */
@@ -1323,7 +1341,7 @@ void GLTexture::AllocTextureStorage(const TextureDescriptor& textureDesc, const 
     InitializeGLTextureSwizzleWithFormat(GetType(), swizzleFormat_, {}, true);
     #endif
 
-    if (initialImage != nullptr)
+    if (imageView != nullptr)
     {
         GLStateManager::Get().SetPixelStoreUnpack(0, 0, 1);
 
@@ -1448,7 +1466,7 @@ void GLTexture::GetRenderbufferParams(GLint* extent, GLint* samples) const
 
             #if !LLGL_GL_ENABLE_OPENGL2X
             if (samples != nullptr)
-                glGetRenderbufferParameteriv(id_, GL_RENDERBUFFER_SAMPLES, samples);
+                glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_SAMPLES, samples);
             #endif
         }
         GLStateManager::Get().PopBoundRenderbuffer();

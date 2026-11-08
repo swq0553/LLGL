@@ -9,6 +9,7 @@
 #include "D3D11StateManager.h"
 #include "D3D11PipelineLayout.h"
 #include "../D3D11Types.h"
+#include "../../DXCommon/DXCore.h"
 #include "../D3D11ObjectUtils.h"
 #include "../Shader/D3D11DomainShader.h"
 #include "../Shader/D3D11VertexShader.h"
@@ -49,31 +50,135 @@ void D3D11GraphicsPSOBase::Bind(D3D11StateManager& stateMngr)
 }
 
 
+static void ConvertInputElementDesc(D3D11_INPUT_ELEMENT_DESC& dst, const VertexAttribute& src)
+{
+    dst.SemanticName            = src.name.c_str();
+    dst.SemanticIndex           = src.semanticIndex;
+    dst.Format                  = DXTypes::ToDXGIFormat(src.format);
+    dst.InputSlot               = src.slot;
+    dst.AlignedByteOffset       = src.offset;
+    dst.InputSlotClass          = (src.instanceDivisor > 0 ? D3D11_INPUT_PER_INSTANCE_DATA : D3D11_INPUT_PER_VERTEX_DATA);
+    dst.InstanceDataStepRate    = src.instanceDivisor;
+}
+
+void D3D11GraphicsPSOBase::BuildInputLayout(
+    ArrayView<VertexAttribute>                  inAttributes,
+    DynamicVector<D3D11_INPUT_ELEMENT_DESC>&    outAttributes)
+{
+    const UINT numVertexAttribs = static_cast<UINT>(inAttributes.size());
+
+    outAttributes.resize(numVertexAttribs);
+
+    for_range(i, numVertexAttribs)
+        ConvertInputElementDesc(outAttributes[i], inAttributes[i]);
+}
+
+// Converts a vertex attribute to a D3D stream-output entry
+static void ConvertSODeclEntry(D3D11_SO_DECLARATION_ENTRY& dst, const VertexAttribute& src)
+{
+    const char* systemValueSemantic = DXTypes::SystemValueToString(src.systemValue);
+    dst.Stream          = 0; // Stream refers to the HLSL output stream, but LLGL does not make such a distinction
+    dst.SemanticName    = (systemValueSemantic != nullptr ? systemValueSemantic : src.name.c_str());
+    dst.SemanticIndex   = src.semanticIndex;
+    dst.StartComponent  = 0;
+    dst.ComponentCount  = GetFormatAttribs(src.format).components;
+    dst.OutputSlot      = src.slot;
+}
+
+void D3D11GraphicsPSOBase::BuildStreamOutput(
+    ArrayView<VertexAttribute>                  inAttributes,
+    DynamicVector<D3D11_SO_DECLARATION_ENTRY>&  outAttributes,
+    UINT                                        outBufferStrides[D3D11_SO_BUFFER_SLOT_COUNT],
+    UINT&                                       outNumBufferStrides)
+{
+    const UINT numStreamOutputAttribs = static_cast<UINT>(inAttributes.size());
+
+    /* Initialize output elements for geometry shader with stream-output */
+    outAttributes.resize(numStreamOutputAttribs);
+
+    for_range(i, numStreamOutputAttribs)
+    {
+        ConvertSODeclEntry(outAttributes[i], inAttributes[i]);
+        LLGL_ASSERT(outAttributes[i].OutputSlot < D3D11_SO_BUFFER_SLOT_COUNT); //TODO: replace with error report
+        outBufferStrides[outAttributes[i].OutputSlot] = inAttributes[i].stride;
+        outNumBufferStrides = std::max<UINT>(outNumBufferStrides, outAttributes[i].OutputSlot + 1);
+    }
+}
+
+
 /*
  * ======= Protected: =======
  */
 
-D3D11GraphicsPSOBase::D3D11GraphicsPSOBase(const GraphicsPipelineDescriptor& desc) :
+D3D11GraphicsPSOBase::D3D11GraphicsPSOBase(ID3D11Device* device, const GraphicsPipelineDescriptor& desc) :
     D3D11PipelineState { /*isGraphicsPSO:*/ true, desc.pipelineLayout, GetShadersAsArray(desc) }
 {
+    /* Retrieve all D3D shaders from descriptor */
+    GetD3DNativeShaders(desc);
+
+    /* First, try to obtain a pre-allocated geometry shader for stream-output attributes */
+    ID3DBlob* streamOutputShaderByteCode = nullptr;
+    if (auto* geometryShaderD3D = LLGL_CAST(const D3D11Shader*, desc.geometryShader))
+    {
+        /* Use geometry shader as potential stream-output byte code */
+        streamOutputShaderByteCode = geometryShaderD3D->GetByteCode();
+    }
+    else if (auto* domainShaderD3D = LLGL_CAST(const D3D11DomainShader*, desc.tessEvaluationShader))
+    {
+        /* Use domain shader as potential stream-output byte code and take its proxy geometry shader */
+        streamOutputShaderByteCode = domainShaderD3D->GetByteCode();
+        gs_ = domainShaderD3D->GetProxyGeometryShader();
+    }
+    else if (auto* vertexShaderD3D = LLGL_CAST(const D3D11VertexShader*, desc.vertexShader))
+    {
+        /* Use vertex shader as potential stream-output byte code and take its proxy geometry shader */
+        streamOutputShaderByteCode = vertexShaderD3D->GetByteCode();
+        gs_ = vertexShaderD3D->GetProxyGeometryShader();
+    }
+
     /* Validate pointers and get D3D shader objects */
     if (auto* vertexShaderD3D = LLGL_CAST(const D3D11VertexShader*, desc.vertexShader))
     {
         /* Take input layout and store optional proxy geometry-shader for stream-output */
-        inputLayout_ = vertexShaderD3D->GetInputLayout();
-        gs_ = vertexShaderD3D->GetProxyGeometryShader();
+
+        // FIXME: https://github.com/LukasBanana/LLGL/pull/257#discussion_r3767429388
+
+        ID3DBlob* vertexByteCode = vertexShaderD3D->GetByteCode();
+
+        if (!desc.inputVertexAttribs.empty() && vertexByteCode != nullptr)
+        {
+            DynamicVector<D3D11_INPUT_ELEMENT_DESC> inputElements;
+            BuildInputLayout(desc.inputVertexAttribs, inputElements);
+
+            HRESULT hr = device->CreateInputLayout(
+                inputElements.data(),
+                static_cast<UINT>(inputElements.size()),
+                vertexByteCode->GetBufferPointer(),
+                vertexByteCode->GetBufferSize(),
+                inputLayout_.GetAddressOf()
+            );
+            DXThrowIfFailed(hr, "failed to create D3D11 input layout");
+        }
+
+        if (!desc.outputVertexAttribs.empty() && streamOutputShaderByteCode != nullptr)
+        {
+            // FIXME: https://github.com/LukasBanana/LLGL/pull/257#discussion_r3784385726
+            /* Create geometry shader with stream-output declaration */
+            D3D11Shader::CreateNativeShaderFromBlob(
+                device,
+                ShaderType::Geometry,
+                streamOutputShaderByteCode,
+                desc.outputVertexAttribs.size(),
+                desc.outputVertexAttribs.data()
+            ).As<ID3D11GeometryShader>(&gs_);
+        }
+
+        // Deprecated feature support: Get input layout from the vertex shader if we failed to get it from the pipeline descriptor.
+        if (inputLayout_ == nullptr)
+            inputLayout_ = vertexShaderD3D->GetInputLayout();
     }
     else
         ResetReport("cannot create D3D graphics PSO without vertex shader", true);
-
-    /* Override proxy geometry shader if the domain shader has one */
-    if (auto* domainShaderD3D = LLGL_CAST(const D3D11DomainShader*, desc.tessEvaluationShader))
-    {
-        if (domainShaderD3D->GetProxyGeometryShader())
-            gs_ = domainShaderD3D->GetProxyGeometryShader();
-    }
-
-    GetD3DNativeShaders(desc);
 
     /* Store dynamic pipeline states */
     primitiveTopology_  = DXTypes::ToD3DPrimitiveTopology(desc.primitiveTopology);
@@ -95,19 +200,19 @@ void D3D11GraphicsPSOBase::SetStaticViewportsAndScissors(D3D11StateManager& stat
 {
     if (staticStateBuffer_)
     {
-        ByteBufferIterator byteBufferIter{ staticStateBuffer_.get() };
-        if (numStaticViewports_ > 0)
+        ByteBufferConstIterator byteBufferIter = staticStateBuffer_.GetBufferIterator();
+        if (staticStateBuffer_.GetNumViewports() > 0)
         {
             stateMngr.GetContext()->RSSetViewports(
-                numStaticViewports_,
-                byteBufferIter.Next<D3D11_VIEWPORT>(numStaticViewports_)
+                staticStateBuffer_.GetNumViewports(),
+                byteBufferIter.Next<D3D11_VIEWPORT>(staticStateBuffer_.GetNumViewports())
             );
         }
-        if (numStaticScissors_ > 0)
+        if (staticStateBuffer_.GetNumScissors() > 0)
         {
             stateMngr.GetContext()->RSSetScissorRects(
-                numStaticScissors_,
-                byteBufferIter.Next<D3D11_RECT>(numStaticScissors_)
+                staticStateBuffer_.GetNumScissors(),
+                byteBufferIter.Next<D3D11_RECT>(staticStateBuffer_.GetNumScissors())
             );
         }
     }
@@ -129,79 +234,35 @@ void D3D11GraphicsPSOBase::GetD3DNativeShaders(const GraphicsPipelineDescriptor&
 
 void D3D11GraphicsPSOBase::BuildStaticStateBuffer(const GraphicsPipelineDescriptor& desc)
 {
-    /* Allocate packed raw buffer */
-    const std::size_t bufferSize =
-    (
-        desc.viewports.size() * sizeof(D3D11_VIEWPORT) +
-        desc.scissors.size()  * sizeof(D3D11_RECT    )
+    ByteBufferIterator byteBufferIter = staticStateBuffer_.Allocate(
+        desc.viewports.size(), desc.scissors.size(),
+        sizeof(D3D11_VIEWPORT), sizeof(D3D11_RECT),
+        GetMutableReport(), D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE
     );
-    staticStateBuffer_ = MakeUniqueArray<char>(bufferSize);
-
-    ByteBufferIterator byteBufferIter{ staticStateBuffer_.get() };
-
-    /* Build static viewports in raw buffer */
-    if (!desc.viewports.empty())
-        BuildStaticViewports(desc.viewports.size(), desc.viewports.data(), byteBufferIter);
-
-    /* Build static scissors in raw buffer */
-    if (!desc.scissors.empty())
-        BuildStaticScissors(desc.scissors.size(), desc.scissors.data(), byteBufferIter);
-}
-
-void D3D11GraphicsPSOBase::BuildStaticViewports(std::size_t numViewports, const Viewport* viewports, ByteBufferIterator& byteBufferIter)
-{
-    /* Store number of viewports and validate limit */
-    numStaticViewports_ = static_cast<UINT>(numViewports);
-
-    if (numStaticViewports_ > D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE)
-    {
-        GetMutableReport().Errorf(
-            "too many viewports in graphics PSO: %u specified, but limit is %d\n",
-            numStaticViewports_,
-            D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE
-        );
-        numStaticViewports_ = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
-    }
 
     /* Build <D3D11_VIEWPORT> entries */
-    for_range(i, numViewports)
+    for_range(i, staticStateBuffer_.GetNumViewports())
     {
         D3D11_VIEWPORT* dst = byteBufferIter.Next<D3D11_VIEWPORT>();
         {
-            dst->TopLeftX   = viewports[i].x;
-            dst->TopLeftY   = viewports[i].y;
-            dst->Width      = viewports[i].width;
-            dst->Height     = viewports[i].height;
-            dst->MinDepth   = viewports[i].minDepth;
-            dst->MaxDepth   = viewports[i].maxDepth;
+            dst->TopLeftX   = desc.viewports[i].x;
+            dst->TopLeftY   = desc.viewports[i].y;
+            dst->Width      = desc.viewports[i].width;
+            dst->Height     = desc.viewports[i].height;
+            dst->MinDepth   = desc.viewports[i].minDepth;
+            dst->MaxDepth   = desc.viewports[i].maxDepth;
         }
-    }
-}
-
-void D3D11GraphicsPSOBase::BuildStaticScissors(std::size_t numScissors, const Scissor* scissors, ByteBufferIterator& byteBufferIter)
-{
-    /* Store number of scissors and validate limit */
-    numStaticScissors_ = static_cast<UINT>(numScissors);
-
-    if (numStaticScissors_ > D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE)
-    {
-        GetMutableReport().Errorf(
-            "too many scissor rectangles in graphics PSO: %u specified, but limit is %d\n",
-            numStaticScissors_,
-            D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE
-        );
-        numStaticScissors_ = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
     }
 
     /* Build <D3D11_RECT> entries */
-    for_range(i, numScissors)
+    for_range(i, staticStateBuffer_.GetNumScissors())
     {
         D3D11_RECT* dst = byteBufferIter.Next<D3D11_RECT>();
         {
-            dst->left   = static_cast<LONG>(scissors[i].x);
-            dst->top    = static_cast<LONG>(scissors[i].y);
-            dst->right  = static_cast<LONG>(scissors[i].x + scissors[i].width);
-            dst->bottom = static_cast<LONG>(scissors[i].y + scissors[i].height);
+            dst->left   = static_cast<LONG>(desc.scissors[i].x);
+            dst->top    = static_cast<LONG>(desc.scissors[i].y);
+            dst->right  = static_cast<LONG>(desc.scissors[i].x + desc.scissors[i].width);
+            dst->bottom = static_cast<LONG>(desc.scissors[i].y + desc.scissors[i].height);
         }
     }
 }

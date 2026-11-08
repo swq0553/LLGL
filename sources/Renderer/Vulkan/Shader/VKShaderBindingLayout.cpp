@@ -10,6 +10,7 @@
 #include "../../../Core/CoreUtils.h"
 #include "../../../Core/MacroUtils.h"
 #include <LLGL/Utils/ForRange.h>
+#include <LLGL/Report.h>
 #include <algorithm>
 
 #if LLGL_VK_ENABLE_SPIRV_REFLECT
@@ -49,14 +50,14 @@ static VkDescriptorType SpirvTypeToVkDescriptorType(const SpirvReflect::SpvType*
             case spv::OpTypeImage:
                 if (derefType->dimension == spv::DimBuffer)
                 {
-                    if (type->readonly || isSampledImage)
+                    if (derefType->readonly || isSampledImage)
                         return VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER;
                     else
                         return VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER;
                 }
                 else
                 {
-                    if (type->readonly || isSampledImage)
+                    if (derefType->readonly || isSampledImage)
                         return VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
                     else
                         return VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
@@ -65,6 +66,8 @@ static VkDescriptorType SpirvTypeToVkDescriptorType(const SpirvReflect::SpvType*
             case spv::OpTypeSampler:
                 return VK_DESCRIPTOR_TYPE_SAMPLER;
 
+            case spv::OpTypeArray:
+            case spv::OpTypeRuntimeArray:
             case spv::OpTypeSampledImage:
                 return SpirvTypeToVkDescriptorType(derefType->baseType, true);
 
@@ -83,7 +86,7 @@ static VkDescriptorType SpirvTypeToVkDescriptorType(const SpirvReflect::SpvType*
 
 #endif // /LLGL_VK_ENABLE_SPIRV_REFLECT
 
-bool VKShaderBindingLayout::BuildFromSpirvModule(const void* data, std::size_t size)
+bool VKShaderBindingLayout::BuildFromSpirvModule(const void* data, std::size_t size, Report* outReport)
 {
     #if LLGL_VK_ENABLE_SPIRV_REFLECT
 
@@ -94,7 +97,7 @@ bool VKShaderBindingLayout::BuildFromSpirvModule(const void* data, std::size_t s
         return false;
 
     /* Convert binding points into to module bindings */
-    auto ConvertBindingPoint = [](ModuleBinding& dst, const SpirvReflect::SpvUniform& src)
+    auto ConvertBindingPoint = [](ModuleBinding& dst, const SpirvReflect::SpvUniform& src) -> bool
     {
         dst.srcDescriptorSet    = src.set;
         dst.srcBinding          = src.binding;
@@ -103,13 +106,31 @@ bool VKShaderBindingLayout::BuildFromSpirvModule(const void* data, std::size_t s
         dst.spirvDescriptorSet  = src.setWordOffset;
         dst.spirvBinding        = src.bindingWordOffset;
         dst.descriptorType      = SpirvTypeToVkDescriptorType(src.type);
+        return (dst.descriptorType != VK_DESCRIPTOR_TYPE_MAX_ENUM);
     };
 
     bindings_.resize(reflection.GetUniforms().size());
 
     std::size_t bindingIndex = 0;
+    bool hasUniformValidationFailed = false;
+
     for (const auto& it : reflection.GetUniforms())
-        ConvertBindingPoint(bindings_[bindingIndex++], it.second);
+    {
+        if (!ConvertBindingPoint(bindings_[bindingIndex++], it.second))
+        {
+            if (outReport != nullptr)
+            {
+                outReport->Errorf(
+                    "SPIR-V binding table failure: resource '%s' (set=%u, binding=%u) could not be resolved to a valid descriptor type\n",
+                    it.second.name, it.second.set, it.second.binding
+                );
+            }
+            hasUniformValidationFailed = true;
+        }
+    }
+
+    if (hasUniformValidationFailed)
+        return false;
 
     /* Sort module bindings by descriptor set and binding points */
     std::sort(

@@ -13,7 +13,11 @@
 #include <LLGL/RendererConfiguration.h>
 #include <LLGL/Container/ArrayView.h>
 #include <memory>
+#include "GLDriverBugMitigation.h"
 #include "../RenderState/GLStateManager.h"
+#include "../Buffer/GLVertexArrayPool.h"
+#include "../Buffer/GLStagingBufferPool.h"
+#include "../../../Core/Vendor.h"
 
 
 namespace LLGL
@@ -46,6 +50,9 @@ class GLContext
 
     public:
 
+        GLContext(const GLContext&) = delete;
+        GLContext& operator = (const GLContext&) = delete;
+
         virtual ~GLContext() = default;
 
         // Returns the number of samples for this GL context. Must be in range [1, 64].
@@ -53,6 +60,9 @@ class GLContext
 
         // Returns the native handle of the GL context.
         virtual bool GetNativeHandle(void* nativeHandle, std::size_t nativeHandleSize) const = 0;
+
+        // Returns true if we should share the same GL context across the surfaces.
+        virtual bool IsSharableForSurface(const Surface *surface) const;
 
     public:
 
@@ -72,6 +82,28 @@ class GLContext
         inline GLStateManager& GetStateManager()
         {
             return stateMngr_;
+        }
+
+        // Returns the vertex array object (VAO) pool of this context since VAOs cannot be natively shared across GL contexts.
+        inline GLVertexArrayPool& GetVertexArrayPool()
+        {
+            return vertexArrayPool_;
+        }
+
+        #if LLGL_GL_DRIVER_BUG_ANGLE_glBufferSubData
+        // Returns the staging buffer pool for environments that demand manual hazard tracking, like the Metal backend in ANGLE.
+        inline GLStagingBufferPool& GetStagingBufferPool()
+        {
+            return stagingBufferPool_;
+        }
+        #endif
+
+        // Returns the 'potential' device vendor this GL context was created on.
+        // Since there is no standardized way to determine this, this is only an estimate using `glGetString()`.
+        // This also does not consider software renderers such as "llvmpipe".
+        inline DeviceVendor GetDeviceVendor() const
+        {
+            return deviceVendor_;
         }
 
         // Returns the global index of this GL context. This is assigned when the context is created. The first index starts with 1. The invalid index is 0.
@@ -100,6 +132,9 @@ class GLContext
         // Returns the global index of the current GL context. 0 denotes an invalid index.
         static unsigned GetCurrentGlobalIndex();
 
+        // Returns the 'potential' device vendor the current GL context was created on. See GetDeviceVendor().
+        static DeviceVendor GetCurrentDeviceVendor();
+
         // Sets the swap interval for the current GL context.
         static bool SetCurrentSwapInterval(int interval);
 
@@ -125,12 +160,22 @@ class GLContext
         // Sets the depth-stencil format to D24UNormS8UInt;
         void SetDefaultDepthStencilFormat();
 
+        // Tries to estimate what device vendor this GL context was created on. This uses `glGetString()` as an indicator.
+        void DetermineDeviceVendor();
+
     private:
 
-        GLStateManager  stateMngr_;
-        Format          colorFormat_        = Format::Undefined;
-        Format          depthStencilFormat_ = Format::Undefined;
-        unsigned        globalIndex_        = 0;
+        GLStateManager      stateMngr_;
+        GLVertexArrayPool   vertexArrayPool_;
+
+        #if LLGL_GL_DRIVER_BUG_ANGLE_glBufferSubData
+        GLStagingBufferPool stagingBufferPool_;
+        #endif
+
+        Format              colorFormat_        = Format::Undefined;
+        Format              depthStencilFormat_ = Format::Undefined;
+        DeviceVendor        deviceVendor_       = DeviceVendor::Undefined;
+        unsigned            globalIndex_        = 0;
 
 };
 

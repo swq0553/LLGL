@@ -10,9 +10,10 @@ ENABLE_D3D11="OFF"
 ENABLE_D3D12="OFF"
 ENABLE_EXAMPLES="ON"
 ENABLE_TESTS="ON"
-ENABLE_GL2X="OFF"
+ENABLE_GL_PROFILE="OpenGL Core"
 ENABLE_SPIRV_REFLECT="OFF"
 ENABLE_WAYLAND="OFF"
+ENABLE_GOLANG="OFF"
 BUILD_TYPE="Release"
 UNITY_BUILD="OFF"
 PROJECT_ONLY=0
@@ -53,6 +54,7 @@ if [ $PLATFORM_MSYS -eq 1 ]; then
 else
     echo "  --wayland ................. Include Wayland support"
 fi
+    echo "  --golang .................. Include Go wrapper (aka. Golang)"
     echo "  --no-examples ............. Exclude example projects"
     echo "  --no-tests ................ Exclude test projects"
     echo "NOTES:"
@@ -85,7 +87,7 @@ for ARG in "$@"; do
     elif [ "$ARG" = "-u" ] || [ "$ARG" = "--unity-build" ]; then
         UNITY_BUILD="ON"
     elif [ "$ARG" = "--legacy" ]; then
-        ENABLE_GL2X="ON"
+        ENABLE_GL_PROFILE="OpenGL Compatibility"
     elif [ "$ARG" = "--null" ]; then
         ENABLE_NULL="ON"
     elif [ "$ARG" = "--vk" ] || [ "$ARG" = "--vulkan" ]; then # Accept '--vulkan' for backward compatibility
@@ -112,6 +114,8 @@ for ARG in "$@"; do
         else
             echo "Warning: Wayland is not supported for MSYS"
         fi
+    elif [ "$ARG" = "--golang" ]; then
+        ENABLE_GOLANG="ON"
     elif [ "$ARG" = "--no-examples" ]; then
         ENABLE_EXAMPLES="OFF"
     elif [ "$ARG" = "--no-tests" ]; then
@@ -141,7 +145,7 @@ if [ ! -d "$OUTPUT_DIR" ]; then
     mkdir "$OUTPUT_DIR"
 fi
 
-# Checkout external depenencies
+# Checkout external dependencies
 GAUSSIAN_LIB_DIR="GaussianLib/include"
 
 if [ -f "$SOURCE_DIR/external/$GAUSSIAN_LIB_DIR/Gauss/Gauss.h" ]; then
@@ -166,13 +170,14 @@ fi
 # Build into output directory (this syntax requires CMake 3.13+)
 OPTIONS=(
     -DLLGL_BUILD_WRAPPER_C99=ON
+    -DLLGL_BUILD_WRAPPER_GO=$ENABLE_GOLANG
     -DLLGL_BUILD_RENDERER_OPENGL=ON
-    -DLLGL_GL_ENABLE_OPENGL2X=$ENABLE_GL2X
+    -DLLGL_GL_PROFILES="$ENABLE_GL_PROFILE"
     -DLLGL_BUILD_RENDERER_NULL=$ENABLE_NULL
     -DLLGL_BUILD_RENDERER_VULKAN=$ENABLE_VULKAN
     -DLLGL_BUILD_RENDERER_DIRECT3D11=$ENABLE_D3D11
     -DLLGL_BUILD_RENDERER_DIRECT3D12=$ENABLE_D3D12
-    -DLLGL_VK_ENABLE_SPIRV_REFLECT=ENABLE_SPIRV_REFLECT
+    -DLLGL_VK_ENABLE_SPIRV_REFLECT=$ENABLE_SPIRV_REFLECT
     -DLLGL_LINUX_ENABLE_WAYLAND=$ENABLE_WAYLAND
     -DLLGL_BUILD_EXAMPLES=$ENABLE_EXAMPLES
     -DLLGL_BUILD_TESTS=$ENABLE_TESTS
@@ -184,8 +189,8 @@ OPTIONS=(
 )
 
 if [ $PROJECT_ONLY -eq 0 ]; then
-    cmake -DCMAKE_BUILD_TYPE=$BUILD_TYPE ${OPTIONS[@]}
+    cmake -DCMAKE_BUILD_TYPE=$BUILD_TYPE "${OPTIONS[@]}"
     cmake --build "$OUTPUT_DIR"
 else
-    cmake ${OPTIONS[@]} -G "$GENERATOR"
+    cmake "${OPTIONS[@]}" -G "$GENERATOR"
 fi

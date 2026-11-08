@@ -19,7 +19,7 @@ namespace LLGL
 {
 
 
-// OpenGL extension map type: Maps the extension name to boolean indicating whether or not the extension was loaded successully.
+// OpenGL extension map type: Maps the extension name to boolean indicating whether or not the extension was loaded successfully.
 using GLExtensionMap = std::map<std::string, bool>;
 
 /* --- Internal functions --- */
@@ -972,16 +972,18 @@ static GLExtensionMap QuerySupportedOpenGLExtensions(bool isCoreProfile)
 
 #ifndef __APPLE__
 
-// Includes all GL extensions that are considered default for core profiles
+// Includes all GL extensions that are considered default for core profiles.
+// Some GL implementations filter these out since they are considered implied in core profiles.
 static void IncludeDefaultCoreProfileExtensions(GLExtensionMap& extensions)
 {
-    static const char* coreProfileDefaultExtenions[] =
+    static const char* coreProfileDefaultExtensions[] =
     {
         "GL_ARB_compatibility",
         "GL_ARB_multitexture",          // GL 1.2
         "GL_ARB_shader_objects",
         "GL_ARB_shader_objects_21",
         "GL_ARB_shader_objects_30",
+        "GL_ARB_texture_cube_map",      // GL 1.3
         "GL_ARB_vertex_buffer_object",
         "GL_ARB_vertex_shader",
         "GL_EXT_blend_func_separate",   // GL 2.0
@@ -990,7 +992,7 @@ static void IncludeDefaultCoreProfileExtensions(GLExtensionMap& extensions)
         "GL_EXT_stencil_two_side",      // GL 2.0
         "GL_EXT_texture3D",
     };
-    for (const char* ext : coreProfileDefaultExtenions)
+    for (const char* ext : coreProfileDefaultExtensions)
         extensions[ext] = false;
 }
 
@@ -1007,6 +1009,12 @@ static void IncludeImpliedExtensions(GLExtensionMap& extensions)
     };
     ImplyExtension("GL_ARB_gpu_shader5", { "GL_ARB_geometry_shader4" });
     ImplyExtension("GL_ARB_occlusion_query2", { "GL_ARB_occlusion_query" });
+
+    /*
+    This is a workaround, GL_ARB_transform_feedback2 does *not* imply support for GL_EXT_transform_feedback,
+    but since this extension is already loaded without the EXT suffixes, simply enable this extension
+    */
+    ImplyExtension("GL_ARB_transform_feedback2", { "GL_EXT_transform_feedback" });
 }
 
 #endif // /__APPLE__
@@ -1017,7 +1025,7 @@ static GLExtensionMap           g_OpenGLExtensionsMap;
 static std::set<const char*>    g_supportedOpenGLExtensions;
 static std::set<const char*>    g_loadedOpenGLExtensions;
 
-bool LoadSupportedOpenGLExtensions(bool isCoreProfile, bool abortOnFailure)
+bool LoadSupportedOpenGLExtensions(GLContext& /*context*/, bool isCoreProfile, bool abortOnFailure)
 {
     /* Only load GL extensions once */
     if (g_OpenGLExtensionsLoaded)
@@ -1106,7 +1114,7 @@ bool LoadSupportedOpenGLExtensions(bool isCoreProfile, bool abortOnFailure)
         {
             if (extLoadingProc(extName, abortOnFailure, /*usePlaceholder:*/ false))
             {
-                /* Enable extension in registry */
+                /* Enable extension in registry and mark extension as supported in string-to-bool map */
                 RegisterExtension(extensionID);
                 it->second = true;
             }
@@ -1126,8 +1134,13 @@ bool LoadSupportedOpenGLExtensions(bool isCoreProfile, bool abortOnFailure)
     auto EnableExtension = [&](const std::string& extName, GLExt extensionID) -> void
     {
         /* Try to enable OpenGL extension */
-        if (g_OpenGLExtensionsMap.find(extName) != g_OpenGLExtensionsMap.end())
+        auto it = g_OpenGLExtensionsMap.find(extName);
+        if (it != g_OpenGLExtensionsMap.end())
+        {
+            /* Enable extension in registry and mark extension as supported in string-to-bool map */
             RegisterExtension(extensionID);
+            it->second = true;
+        }
     };
 
     #define LOAD_GLEXT(NAME) \
@@ -1238,8 +1251,10 @@ bool LoadSupportedOpenGLExtensions(bool isCoreProfile, bool abortOnFailure)
     ENABLE_GLEXT( ARB_seamless_cubemap_per_texture );
     ENABLE_GLEXT( ARB_ES3_compatibility            );
     ENABLE_GLEXT( EXT_texture_array                );
+    ENABLE_GLEXT( EXT_texture_filter_anisotropic   );
     ENABLE_GLEXT( INTEL_conservative_rasterization );
     ENABLE_GLEXT( NV_conservative_raster           );
+    ENABLE_GLEXT( ARB_texture_compression_bptc     );
 
     #undef LOAD_GLEXT
     #undef ENABLE_GLEXT

@@ -60,6 +60,7 @@ DEF_TEST( CombinedTexSamplers )
     {
         psoDesc.pipelineLayout      = psoLayout;
         psoDesc.renderPass          = swapChain->GetRenderPass();
+        psoDesc.inputVertexAttribs  = vertexFormats[VertFmtStd].attributes;
         psoDesc.vertexShader        = shaders[VSCombinedSamplers];
         psoDesc.fragmentShader      = shaders[PSCombinedSamplers];
         psoDesc.depth.testEnabled   = true;
@@ -100,7 +101,7 @@ DEF_TEST( CombinedTexSamplers )
 
     const Extent2D halfResolution{ opt.resolution.width/2, opt.resolution.height };
 
-    cmdBuffer->Begin();
+    BEGIN();
     {
         cmdBuffer->UpdateBuffer(*sceneCbuffer, 0, &sceneConstants, sizeof(sceneConstants));
 
@@ -134,7 +135,7 @@ DEF_TEST( CombinedTexSamplers )
         }
         cmdBuffer->EndRenderPass();
     }
-    cmdBuffer->End();
+    END();
 
     // Evaluate readback result
     SaveCapture(readbackTex, "CombinedSamplers");

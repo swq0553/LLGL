@@ -29,7 +29,7 @@ LLGL_EXPORT const char* ToString(const ShaderType val)
 
         case T::Compute:        return "compute";
 
-        case T::Amplification:  return "amplification";
+        case T::Task:           return "task";
         case T::Mesh:           return "mesh";
     }
 
@@ -61,12 +61,13 @@ LLGL_EXPORT const char* ToString(const WarningType val)
         case T::ImproperState:      return "improper state";
         case T::PointlessOperation: return "pointless operation";
         case T::VaryingBehavior:    return "varying behavior";
+        case T::DeprecatedFeature:  return "deprecated feature";
     }
 
     return nullptr;
 }
 
-//TODO: rename ToString() functions that return a more human readable friendly name to ToName() or ToLabel.
+//TODO: rename ToString() functions that return a more human readable friendly name to ToName() or ToLabel().
 LLGL_EXPORT const char* ToString(const ShadingLanguage val)
 {
     using T = ShadingLanguage;
@@ -112,6 +113,7 @@ LLGL_EXPORT const char* ToString(const ShadingLanguage val)
         case T::HLSL_6_6:   return "HLSL 6.6";
         case T::HLSL_6_7:   return "HLSL 6.7";
         case T::HLSL_6_8:   return "HLSL 6.8";
+        case T::HLSL_6_9:   return "HLSL 6.9";
 
         case T::Metal:      return "Metal";
         case T::Metal_1_0:  return "Metal 1.0";
@@ -126,6 +128,18 @@ LLGL_EXPORT const char* ToString(const ShadingLanguage val)
 
         case T::SPIRV:      return "SPIR-V";
         case T::SPIRV_100:  return "SPIR-V 1.00";
+
+        case T::DXIL:       return "DXIL";
+        case T::DXIL_1_0:   return "DXIL 1.0";
+        case T::DXIL_1_1:   return "DXIL 1.1";
+        case T::DXIL_1_2:   return "DXIL 1.2";
+        case T::DXIL_1_3:   return "DXIL 1.3";
+        case T::DXIL_1_4:   return "DXIL 1.4";
+        case T::DXIL_1_5:   return "DXIL 1.5";
+        case T::DXIL_1_6:   return "DXIL 1.6";
+        case T::DXIL_1_7:   return "DXIL 1.7";
+        case T::DXIL_1_8:   return "DXIL 1.8";
+        case T::DXIL_1_9:   return "DXIL 1.9";
 
         default:            break;
     }
@@ -229,6 +243,8 @@ LLGL_EXPORT const char* ToString(const Format val)
         LLGL_CASE_TO_STR_TYPED( Format, RG11B10Float      );
         LLGL_CASE_TO_STR_TYPED( Format, RGB9E5Float       );
         LLGL_CASE_TO_STR_TYPED( Format, BGR5A1UNorm       );
+        LLGL_CASE_TO_STR_TYPED( Format, B5G6R5UNorm       );
+        LLGL_CASE_TO_STR_TYPED( Format, BGRA4UNorm        );
 
         /* --- Depth-stencil formats --- */
         LLGL_CASE_TO_STR_TYPED( Format, D16UNorm          );
@@ -247,6 +263,10 @@ LLGL_EXPORT const char* ToString(const Format val)
         LLGL_CASE_TO_STR_TYPED( Format, BC4SNorm          );
         LLGL_CASE_TO_STR_TYPED( Format, BC5UNorm          );
         LLGL_CASE_TO_STR_TYPED( Format, BC5SNorm          );
+        LLGL_CASE_TO_STR_TYPED( Format, BC6HUFloat        );
+        LLGL_CASE_TO_STR_TYPED( Format, BC6HSFloat        );
+        LLGL_CASE_TO_STR_TYPED( Format, BC7UNorm          );
+        LLGL_CASE_TO_STR_TYPED( Format, BC7UNorm_sRGB     );
 
         /* --- Advanced scalable texture compression (ASTC) formats --- */
         LLGL_CASE_TO_STR_TYPED( Format, ASTC4x4           );
@@ -391,6 +411,7 @@ LLGL_EXPORT const char* ToString(const SystemValue val)
         LLGL_CASE_TO_STR_TYPED( SystemValue, SampleID          );
         LLGL_CASE_TO_STR_TYPED( SystemValue, Stencil           );
         LLGL_CASE_TO_STR_TYPED( SystemValue, VertexID          );
+        LLGL_CASE_TO_STR_TYPED( SystemValue, ViewIndex         );
         LLGL_CASE_TO_STR_TYPED( SystemValue, ViewportIndex     );
     }
     return nullptr;

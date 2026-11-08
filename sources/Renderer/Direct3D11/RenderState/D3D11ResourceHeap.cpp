@@ -38,7 +38,7 @@ namespace LLGL
 /*
 
 The internal buffer of D3D11ResourceHeap is tightly packed which stores all segments of binding points consecutively.
-Here is an illustration of the buffer layout for one Texture resouce (at binding point 4) and two StorageBuffer resources (at binding points 5 and 6)
+Here is an illustration of the buffer layout for one Texture resource (at binding point 4) and two StorageBuffer resources (at binding points 5 and 6)
 on a 32-bit build, both for the fragment shader stage only:
 
 Offset      Attribute                              Value   Description                                         Segment
@@ -212,7 +212,7 @@ std::uint32_t D3D11ResourceHeap::WriteResourceViews(std::uint32_t firstDescripto
         subresourceContext.newIndex = subresourceLocator.index;
 
         /* Write descriptor into respective heap segment for each affected shader stage */
-        for_range(stage, static_cast<int>(D3DShaderStage_Count))
+        for_range(stage, static_cast<int>(D3DShaderStage_Num))
         {
             const std::uint32_t offset = binding.stages[stage].segmentOffset;
             if (offset == BindingSegmentLocation::invalidOffset)
@@ -1147,7 +1147,7 @@ D3D11ResourceHeap::D3DShaderStage D3D11ResourceHeap::StageFlagsToD3DShaderStage(
         case StageFlags::GeometryStage:         return D3DShaderStage_GS;
         case StageFlags::FragmentStage:         return D3DShaderStage_PS;
         case StageFlags::ComputeStage:          return D3DShaderStage_CS;
-        default:                                return D3DShaderStage_Count;
+        default:                                return D3DShaderStage_Num;
     }
 }
 

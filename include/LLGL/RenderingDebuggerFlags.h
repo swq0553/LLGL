@@ -12,6 +12,7 @@
 #include <LLGL/Export.h>
 #include <LLGL/Container/DynamicVector.h>
 #include <LLGL/Container/StringLiteral.h>
+#include <LLGL/Deprecated.h>
 #include <cstdint>
 
 
@@ -37,6 +38,7 @@ enum class WarningType
     ImproperState,      //!< Warning due to improper state (e.g. rendering while viewport is not visible).
     PointlessOperation, //!< Warning due to a operation without any effect (e.g. drawing with 0 vertices).
     VaryingBehavior,    //!< Warning due to a varying behavior between the native APIs (e.g. \c SV_VertexID in HLSL behaves different to \c gl_VertexID in GLSL or \c gl_VertexIndex in SPIRV).
+    DeprecatedFeature,  //!< Warning due to use of a deprecated feature.
 };
 
 
@@ -72,6 +74,13 @@ struct ProfileTimeRecord
 
 struct ProfileCommandQueueRecord
 {
+    // Silence deprecation warnings in default constructors until `commandBufferSubmittions` is removed.
+    LLGL_DEPRECATED_IGNORE_PUSH()
+    inline ProfileCommandQueueRecord() = default;
+    inline ProfileCommandQueueRecord(const ProfileCommandQueueRecord&) = default;
+    inline ProfileCommandQueueRecord& operator = (const ProfileCommandQueueRecord&) = default;
+    LLGL_DEPRECATED_IGNORE_POP()
+
     /**
     \brief Counter for all buffer write operations outside of command encoding.
     \see RenderSystem::WriteBuffer
@@ -108,6 +117,10 @@ struct ProfileCommandQueueRecord
     \see CommandQueue::Submit(CommandBuffer&)
     \see CommandQueue::Submit(std::uint32_t, CommandBuffer* const *)
     */
+    std::uint32_t commandBufferSubmissions  = 0;
+
+    //! \deprecated Since 0.05b; Use commandBufferSubmissions instead!
+    LLGL_DEPRECATED("Identifier `commandBufferSubmittions` is deprecated since 0.05b; Use `commandBufferSubmissions` instead!", "commandBufferSubmissions")
     std::uint32_t commandBufferSubmittions  = 0;
 
     /**
@@ -135,6 +148,7 @@ struct ProfileCommandBufferRecord
     /**
     \brief Counter for all vertex buffer and vertex buffer array bindings.
     \see CommandBuffer::SetVertexBuffer
+    \see CommandBuffer::SetVertexBuffers
     \see CommandBuffer::SetVertexBufferArray
     */
     std::uint32_t vertexBufferBindings      = 0;

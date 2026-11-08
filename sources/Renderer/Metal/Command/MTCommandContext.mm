@@ -6,12 +6,14 @@
  */
 
 #include "MTCommandContext.h"
+#include "../Buffer/MTBuffer.h"
 #include "../RenderState/MTDescriptorCache.h"
 #include "../RenderState/MTConstantsCache.h"
 #include "../RenderState/MTResourceHeap.h"
 #include "../RenderState/MTGraphicsPSO.h"
 #include "../RenderState/MTComputePSO.h"
 #include "../RenderState/MTRenderPass.h"
+#include "../RenderState/MTBuiltinPSOFactory.h"
 #include "../Shader/MTShader.h"
 #include "../MTSwapChain.h"
 #include "../Texture/MTRenderTarget.h"
@@ -62,16 +64,19 @@ void MTCommandContext::Flush()
     if (renderEncoder_ != nil)
     {
         [renderEncoder_ endEncoding];
+        [renderEncoder_ release];
         renderEncoder_ = nil;
     }
     else if (computeEncoder_ != nil)
     {
         [computeEncoder_ endEncoding];
+        [computeEncoder_ release];
         computeEncoder_ = nil;
     }
     else if (blitEncoder_ != nil)
     {
         [blitEncoder_ endEncoding];
+        [blitEncoder_ release];
         blitEncoder_ = nil;
     }
 }
@@ -141,7 +146,10 @@ id<MTLComputeCommandEncoder> MTCommandContext::BindComputeEncoder()
     if (computeEncoder_ == nil)
     {
         Flush();
-        computeEncoder_ = [cmdBuffer_ computeCommandEncoder];
+        @autoreleasepool
+        {
+            computeEncoder_ = [[cmdBuffer_ computeCommandEncoder] retain];
+        }
 
         /* A new compute command encoder forces all pipeline states to be reset */
         computeDirtyBits_ = ~0;
@@ -168,7 +176,10 @@ id<MTLBlitCommandEncoder> MTCommandContext::BindBlitEncoder()
     if (blitEncoder_ == nil)
     {
         Flush();
-        blitEncoder_ = [cmdBuffer_ blitCommandEncoder];
+        @autoreleasepool
+        {
+            blitEncoder_ = [[cmdBuffer_ blitCommandEncoder] retain];
+        }
 
         /* Store blit encoder mode */
         contextState_.encoderState = MTEncoderState::Blit;
@@ -297,6 +308,38 @@ id<MTLRenderCommandEncoder> MTCommandContext::DispatchTessellationAndGetRenderEn
     ];
 
     return renderEncoder;
+}
+
+void MTCommandContext::CmdFillBuffer(MTBuffer& dstBufferMT, std::uint64_t dstOffset, std::uint32_t value, std::uint64_t fillSize)
+{
+    /* Check if native "fillBuffer" command can be used */
+    const bool valueBytesAreEqual =
+    (
+        ((value >> 24) & 0x000000FF) == (value & 0x000000FF) &&
+        ((value >> 16) & 0x000000FF) == (value & 0x000000FF) &&
+        ((value >>  8) & 0x000000FF) == (value & 0x000000FF)
+    );
+
+    /* Determine buffer range for fill command */
+    NSRange range;
+    if (fillSize == LLGL_WHOLE_SIZE)
+    {
+        NSUInteger bufferSize = [dstBufferMT.GetNative() length];
+        range = NSMakeRange(0, bufferSize);
+    }
+    else
+    {
+        range = NSMakeRange(
+            static_cast<NSUInteger>(dstOffset),
+            static_cast<NSUInteger>(fillSize)
+        );
+    }
+
+    /* Fill with native command if all four bytes are equal, otherwise use blit and compute commands */
+    if (valueBytesAreEqual)
+        FillBufferByte1(dstBufferMT, range, static_cast<std::uint8_t>(value & 0x000000FF));
+    else
+        FillBufferByte4(dstBufferMT, range, value);
 }
 
 static void ConvertMTLViewport(MTLViewport& dst, const Viewport& src)
@@ -533,6 +576,11 @@ MTKView* MTCommandContext::GetCurrentDrawableView() const
  * ======= Private: =======
  */
 
+static MTLStoreAction PromoteMTStoreAction(MTLStoreAction action)
+{
+    return (action == MTLStoreActionMultisampleResolve ? MTLStoreActionStoreAndMultisampleResolve : MTLStoreActionStore);
+}
+
 void MTCommandContext::BeginRenderPassWithDescriptor(MTLRenderPassDescriptor* renderPassDesc, MTSwapChain* swapChainMT)
 {
     LLGL_ASSERT_PTR(renderPassDesc);
@@ -540,6 +588,21 @@ void MTCommandContext::BeginRenderPassWithDescriptor(MTLRenderPassDescriptor* re
     if (!contextState_.isInsideRenderPass)
     {
         renderPassDesc_ = (MTLRenderPassDescriptor*)[renderPassDesc copy];
+
+        /* Update store actions for swap-chains since render passes can be interrupted at any time to update buffers */
+        if (swapChainMT != nullptr)
+        {
+            const Format depthStencilFormat = swapChainMT->GetDepthStencilFormat();
+
+            if (IsDepthFormat(depthStencilFormat))
+                renderPassDesc_.depthAttachment.storeAction = PromoteMTStoreAction(renderPassDesc_.depthAttachment.storeAction);
+
+            if (IsStencilFormat(depthStencilFormat))
+                renderPassDesc_.stencilAttachment.storeAction = PromoteMTStoreAction(renderPassDesc_.stencilAttachment.storeAction);
+
+            renderPassDesc_.colorAttachments[0].storeAction = PromoteMTStoreAction(renderPassDesc_.colorAttachments[0].storeAction);
+        }
+
         contextState_.isInsideRenderPass = true;
         boundSwapChain_ = swapChainMT;
     }
@@ -548,7 +611,10 @@ void MTCommandContext::BeginRenderPassWithDescriptor(MTLRenderPassDescriptor* re
 void MTCommandContext::BindRenderEncoderWithDescriptor(MTLRenderPassDescriptor* renderPassDesc)
 {
     Flush();
-    renderEncoder_ = [cmdBuffer_ renderCommandEncoderWithDescriptor:renderPassDesc];
+    @autoreleasepool
+    {
+        renderEncoder_ = [[cmdBuffer_ renderCommandEncoderWithDescriptor:renderPassDesc] retain];
+    }
 
     /* A new render command encoder forces all pipeline states to be reset */
     renderDirtyBits_ = ~0;
@@ -736,6 +802,30 @@ NSUInteger MTCommandContext::GetMaxLocalThreads(id<MTLComputePipelineState> comp
         maxThreadgroupSizeX_,
         computePSO.maxTotalThreadsPerThreadgroup
     );
+}
+
+void MTCommandContext::FillBufferByte1(MTBuffer& bufferMT, const NSRange& range, std::uint8_t value)
+{
+    auto blitEncoder = BindBlitEncoder();
+    [blitEncoder fillBuffer:bufferMT.GetNative() range:range value:value];
+}
+
+//TODO: manage binding of compute PSO in MTCommandContext
+void MTCommandContext::FillBufferByte4(MTBuffer& bufferMT, const NSRange& range, std::uint32_t value)
+{
+    auto computeEncoder = BindComputeEncoder();
+
+    /* Bind compute PSO with kernel to fill buffer */
+    id<MTLComputePipelineState> pso = MTBuiltinPSOFactory::Get().GetComputePSO(MTBuiltinComputePSO::FillBufferByte4);
+    [computeEncoder setComputePipelineState:pso];
+
+    /* Bind destination buffer range and store clear value as input constant buffer */
+    [computeEncoder setBuffer:bufferMT.GetNative() offset:range.location atIndex:0];
+    [computeEncoder setBytes:&value length:sizeof(value) atIndex:1];
+
+    /* Dispatch compute kernels */
+    const NSUInteger numValues = range.length / sizeof(std::uint32_t);
+    DispatchThreads1D(computeEncoder, pso, numValues);
 }
 
 

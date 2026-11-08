@@ -29,6 +29,9 @@ struct RenderingCapabilitiesC99Wrapper
 {
     std::vector<LLGLShadingLanguage>    shadingLanguages;
     std::vector<LLGLFormat>             textureFormats;
+    std::vector<LLGLFormat>             vertexFormats;
+    std::vector<LLGLFormat>             swapChainColorFormats;
+    std::vector<LLGLFormat>             swapChainDepthStencilFormats;
 };
 
 void ConvertRenderSystemDesc(LLGL::RenderSystemDescriptor& dst, const LLGLRenderSystemDescriptor& src);

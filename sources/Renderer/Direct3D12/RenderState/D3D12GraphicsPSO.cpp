@@ -6,12 +6,13 @@
  */
 
 #include "D3D12GraphicsPSO.h"
+#include "D3D12PSOUtils.h"
+#include "D3D12RenderPass.h"
+#include "D3D12PipelineStateUtils.h"
 #include "../D3D12RenderSystem.h"
 #include "../D3D12Types.h"
 #include "../D3D12ObjectUtils.h"
 #include "../Shader/D3D12Shader.h"
-#include "D3D12RenderPass.h"
-#include "D3D12PipelineStateUtils.h"
 #include "../Command/D3D12CommandContext.h"
 #include "../../DXCommon/DXCore.h"
 #include "../../CheckedCast.h"
@@ -20,6 +21,7 @@
 #include "../../../Core/Assertion.h"
 #include "../../../Core/ByteBufferIterator.h"
 #include <LLGL/PipelineStateFlags.h>
+#include <LLGL/Utils/ForRange.h>
 
 
 namespace LLGL
@@ -38,6 +40,7 @@ D3D12GraphicsPSO::D3D12GraphicsPSO(
     {
         D3D12PipelineType::Graphics,
         desc.stencil,
+        desc.rasterizer,
         desc.blend,
         desc.rasterizer.scissorTestEnabled,
         desc.viewports,
@@ -94,14 +97,12 @@ void D3D12GraphicsPSO::Bind(D3D12CommandContext& commandContext)
         commandContext.SetPipelineState(GetNative());
 
     /* Set dynamic pipeline states */
-    ID3D12GraphicsCommandList* commandList = commandContext.GetCommandList();
+    commandContext.GetCommandList()->IASetPrimitiveTopology(primitiveTopology_);
 
-    commandList->IASetPrimitiveTopology(primitiveTopology_);
-
-    BindOutputMergerAndStaticStates(commandList);
+    BindOutputMergerAndStaticStates(commandContext);
 }
 
-static D3D12_PRIMITIVE_TOPOLOGY_TYPE GetPrimitiveToplogyType(const PrimitiveTopology topology)
+static D3D12_PRIMITIVE_TOPOLOGY_TYPE GetPrimitiveTopologyType(const PrimitiveTopology topology)
 {
     switch (topology)
     {
@@ -128,13 +129,6 @@ static D3D12_PRIMITIVE_TOPOLOGY_TYPE GetPrimitiveToplogyType(const PrimitiveTopo
     return D3D12_PRIMITIVE_TOPOLOGY_TYPE_UNDEFINED;
 }
 
-static D3D12_INPUT_LAYOUT_DESC GetD3DInputLayoutDesc(const Shader* vs)
-{
-    D3D12_INPUT_LAYOUT_DESC desc = {};
-    LLGL_CAST(const D3D12Shader*, vs)->GetInputLayoutDesc(desc);
-    return desc;
-}
-
 static D3D12_STREAM_OUTPUT_DESC GetD3DStreamOutputDesc(const Shader* vs, const Shader* ds, const Shader* gs)
 {
     D3D12_STREAM_OUTPUT_DESC desc = {};
@@ -150,6 +144,119 @@ static D3D12_STREAM_OUTPUT_DESC GetD3DStreamOutputDesc(const Shader* vs, const S
 static D3D12_INDEX_BUFFER_STRIP_CUT_VALUE GetIndexFormatStripCutValue(Format format)
 {
     return (format == Format::R16UInt ? D3D12_INDEX_BUFFER_STRIP_CUT_VALUE_0xFFFF : D3D12_INDEX_BUFFER_STRIP_CUT_VALUE_0xFFFFFFFF);
+}
+
+static void ReserveVertexAttribs(const GraphicsPipelineDescriptor& desc, LinearStringContainer& outVertexAttribNames)
+{
+    /* Reserve memory for the input element names */
+    outVertexAttribNames.Clear();
+    for (const VertexAttribute& attr : desc.inputVertexAttribs)
+        outVertexAttribNames.Reserve(attr.name.size());
+    for (const VertexAttribute& attr : desc.outputVertexAttribs)
+        outVertexAttribNames.Reserve(attr.name.size());
+}
+
+/*
+Converts a vertex attributes to a D3D12 input element descriptor
+and stores the semantic name in the specified linear string container
+*/
+static void Convert(D3D12_INPUT_ELEMENT_DESC& dst, const VertexAttribute& src, LinearStringContainer& stringContainer)
+{
+    dst.SemanticName            = stringContainer.CopyString(src.name);
+    dst.SemanticIndex           = src.semanticIndex;
+    dst.Format                  = DXTypes::ToDXGIFormat(src.format);
+    dst.InputSlot               = src.slot;
+    dst.AlignedByteOffset       = src.offset;
+    dst.InputSlotClass          = (src.instanceDivisor > 0 ? D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA : D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA);
+    dst.InstanceDataStepRate    = src.instanceDivisor;
+}
+
+void D3D12GraphicsPSO::BuildInputLayout(
+    LLGL::ArrayView<VertexAttribute>            inAttributes,
+    DynamicVector<D3D12_INPUT_ELEMENT_DESC>&    outAttributes,
+    LinearStringContainer&                      vertexAttribNames)
+{
+    const std::size_t numVertexAttribs = inAttributes.size();
+
+    /* Build input element descriptors */
+    outAttributes.resize(numVertexAttribs);
+    for_range(i, numVertexAttribs)
+        Convert(outAttributes[i], inAttributes[i], vertexAttribNames);
+}
+
+/*
+Converts a vertex attributes to a D3D12 input element descriptor
+and stores the semantic name in the specified linear string container
+*/
+static void ConvertSODeclEntry(D3D12_SO_DECLARATION_ENTRY& dst, const VertexAttribute& src, LinearStringContainer& stringContainer)
+{
+    const char* systemValueSemantic = DXTypes::SystemValueToString(src.systemValue);
+    dst.Stream          = 0;
+    dst.SemanticName    = (systemValueSemantic != nullptr ? systemValueSemantic : stringContainer.CopyString(src.name));
+    dst.SemanticIndex   = src.semanticIndex;
+    dst.StartComponent  = 0;
+    dst.ComponentCount  = GetFormatAttribs(src.format).components;
+    dst.OutputSlot      = src.slot;
+}
+
+void D3D12GraphicsPSO::BuildStreamOutput(
+    LLGL::ArrayView<VertexAttribute>                    inAttributes,
+    LLGL::DynamicVector<D3D12_SO_DECLARATION_ENTRY>&    outSODeclEntries,
+    LLGL::DynamicVector<UINT>&                          outSOBufferStrides,
+    LinearStringContainer&                              vertexAttribNames)
+{
+    if (inAttributes.empty())
+       return;
+
+    const std::size_t numStreamOutputAttribs = inAttributes.size();
+
+    /* Reserve memory for the buffer strides */
+    UINT maxSlot = 0;
+    for_range(i, numStreamOutputAttribs)
+        maxSlot = std::max<UINT>(maxSlot, inAttributes[i].slot);
+
+    outSOBufferStrides.clear();
+    outSOBufferStrides.resize(maxSlot + 1, 0);
+
+    /* Build stream-output entries and buffer strides */
+    outSODeclEntries.resize(numStreamOutputAttribs);
+    for_range(i, numStreamOutputAttribs)
+    {
+        const VertexAttribute& attr = inAttributes[i];
+
+        /* Convert vertex attribute to stream-output entry */
+        ConvertSODeclEntry(outSODeclEntries[i], attr, vertexAttribNames);
+
+        /* Store buffer stide */
+        UINT& bufferStride = outSOBufferStrides[attr.slot];
+        if (attr.stride == 0)
+        {
+            /* Error: vertex attribute must not have stride of zero */
+            LLGL_TRAP(
+                "buffer stride in stream-output attribute must not be zero: %s",
+                attr.name.c_str()
+            );
+        }
+        else if (bufferStride == 0)
+        {
+            /* Store new buffer stride */
+            bufferStride = attr.stride;
+        }
+        else if (bufferStride != attr.stride)
+        {
+            LLGL_TRAP(
+                "mismatch between buffer stride (%u) and stream-output attribute (%u): %s",
+                bufferStride, attr.stride, attr.name.c_str()
+            );
+        }
+    }
+
+    /* Build buffer stride */
+    for_range(i, outSOBufferStrides.size())
+    {
+        if (outSOBufferStrides[i] == 0)
+            LLGL_TRAP("stream-output slot %zu is not specified in vertex attributes", i);
+    }
 }
 
 void D3D12GraphicsPSO::CreateNativePSO(
@@ -191,12 +298,47 @@ void D3D12GraphicsPSO::CreateNativePSO(
     /* Convert depth-stencil state */
     D3DConvertDepthStencilDesc(stateDesc.DepthStencilState, desc.depth, desc.stencil);
 
+    /* Convert input assembly state */
+    DynamicVector<D3D12_INPUT_ELEMENT_DESC> inputElements;
+    DynamicVector<D3D12_SO_DECLARATION_ENTRY> soDeclEntries;
+    DynamicVector<UINT> soBufferStrides;
+    LinearStringContainer vertexAttribNames;
+
+    ReserveVertexAttribs(desc, vertexAttribNames);
+    BuildInputLayout(desc.inputVertexAttribs, inputElements, vertexAttribNames);
+    BuildStreamOutput(desc.outputVertexAttribs, soDeclEntries, soBufferStrides, vertexAttribNames);
+
+    /* Set input layout */
+    if (!inputElements.empty())
+    {
+        stateDesc.InputLayout.pInputElementDescs = inputElements.data();
+        stateDesc.InputLayout.NumElements        = static_cast<UINT>(inputElements.size());
+    }
+    else
+    {
+        // Deprecated feature support: Get input layout from the vertex shader if we failed to get it from the pipeline descriptor.
+        LLGL_CAST(const D3D12Shader*, desc.vertexShader)->GetInputLayoutDesc(stateDesc.InputLayout);
+    }
+
+    /* Set stream output */
+    if (!soDeclEntries.empty())
+    {
+        stateDesc.StreamOutput.pSODeclaration   = soDeclEntries.data();
+        stateDesc.StreamOutput.NumEntries       = static_cast<UINT>(soDeclEntries.size());
+        stateDesc.StreamOutput.pBufferStrides   = soBufferStrides.data();
+        stateDesc.StreamOutput.NumStrides       = static_cast<UINT>(soBufferStrides.size());
+        stateDesc.StreamOutput.RasterizedStream = 0;
+    }
+    else
+    {
+        // Deprecated feature support: Get stream output from the shaders if we failed to get it from the pipeline descriptor.
+        stateDesc.StreamOutput = GetD3DStreamOutputDesc(desc.vertexShader, desc.tessEvaluationShader, desc.geometryShader);
+    }
+
     /* Convert other states */
     const bool isStripTopology = IsPrimitiveTopologyStrip(desc.primitiveTopology);
-    stateDesc.InputLayout           = GetD3DInputLayoutDesc(desc.vertexShader);
-    stateDesc.StreamOutput          = GetD3DStreamOutputDesc(desc.vertexShader, desc.tessEvaluationShader, desc.geometryShader);
     stateDesc.IBStripCutValue       = (isStripTopology ? GetIndexFormatStripCutValue(desc.indexFormat) : D3D12_INDEX_BUFFER_STRIP_CUT_VALUE_DISABLED);
-    stateDesc.PrimitiveTopologyType = GetPrimitiveToplogyType(desc.primitiveTopology);
+    stateDesc.PrimitiveTopologyType = GetPrimitiveTopologyType(desc.primitiveTopology);
     stateDesc.SampleMask            = desc.blend.sampleMask;
     stateDesc.NumRenderTargets      = numAttachments;
     stateDesc.SampleDesc.Count      = (renderPass != nullptr ? renderPass->GetSampleDesc().Count : 1);
@@ -213,18 +355,43 @@ void D3D12GraphicsPSO::CreateNativePSO(
     /* Create native PSO */
     ComPtr<ID3D12PipelineState> primaryPSO;
 
-    if (isStripTopology && desc.indexFormat == Format::Undefined)
+    #if LLGL_D3D12_ENABLE_FEATURELEVEL >= 1
+    /*
+    When stream-based PSOs on ID3D12Device2 are available, always create them this way
+    as mixing them with legacy PSOs can cause undefined behavior, especially in the WARP implementation of D3D12.
+    This is primarily needed to support view instancing (aka multiview).
+    */
+    ComPtr<ID3D12Device2> device2;
+    HRESULT hr = device->QueryInterface(IID_PPV_ARGS(device2.ReleaseAndGetAddressOf()));
+    if (SUCCEEDED(hr))
+    {
+        const UINT numViews = (renderPass != nullptr ? renderPass->GetNumViews() : 1);
+
+        /* Create primary PSO with 32-bit index cut off value */
+        primaryPSO = CreateNativePSOWithStreamDesc(device2.Get(), stateDesc, numViews, desc.debugName);
+
+        if (isStripTopology && desc.indexFormat == Format::Undefined)
+        {
+            /* Create secondary PSO with 16-bit index cut off value */
+            stateDesc.IBStripCutValue   = D3D12_INDEX_BUFFER_STRIP_CUT_VALUE_0xFFFF;
+            stateDesc.CachedPSO         = {};
+            secondaryPSO_ = CreateNativePSOWithStreamDesc(device2.Get(), stateDesc, numViews, desc.debugName);
+        }
+    }
+    else
+    #endif // /LLGL_D3D12_ENABLE_FEATURELEVEL
     {
         /* Create primary PSO with 32-bit index cut off value */
         primaryPSO = CreateNativePSOWithDesc(device, stateDesc, desc.debugName);
 
-        /* Create secondary PSO with 16-bit index cut off value */
-        stateDesc.IBStripCutValue   = D3D12_INDEX_BUFFER_STRIP_CUT_VALUE_0xFFFF;
-        stateDesc.CachedPSO         = {};
-        secondaryPSO_ = CreateNativePSOWithDesc(device, stateDesc, desc.debugName);
+        if (isStripTopology && desc.indexFormat == Format::Undefined)
+        {
+            /* Create secondary PSO with 16-bit index cut off value */
+            stateDesc.IBStripCutValue   = D3D12_INDEX_BUFFER_STRIP_CUT_VALUE_0xFFFF;
+            stateDesc.CachedPSO         = {};
+            secondaryPSO_ = CreateNativePSOWithDesc(device, stateDesc, desc.debugName);
+        }
     }
-    else
-        primaryPSO = CreateNativePSOWithDesc(device, stateDesc, desc.debugName);
 
     SetNativeAndUpdateCache(std::move(primaryPSO), pipelineCache);
 }
@@ -240,6 +407,109 @@ ComPtr<ID3D12PipelineState> D3D12GraphicsPSO::CreateNativePSOWithDesc(ID3D12Devi
     }
     return pipelineState;
 }
+
+#if LLGL_D3D12_ENABLE_FEATURELEVEL >= 1
+
+/*
+Stream layout for a view-instanced graphics PSO. Mirrors the fields of D3D12_GRAPHICS_PIPELINE_STATE_DESC and
+appends the VIEW_INSTANCING subobject; the legacy descriptor is converted into this stream below.
+*/
+struct D3DGraphicsPipelineStream
+{
+    D3DPipelineStreamSubobject< D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_ROOT_SIGNATURE,         ID3D12RootSignature*               > rootSignature;
+    D3DPipelineStreamSubobject< D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_VS,                     D3D12_SHADER_BYTECODE              > vs;
+    D3DPipelineStreamSubobject< D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_HS,                     D3D12_SHADER_BYTECODE              > hs;
+    D3DPipelineStreamSubobject< D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DS,                     D3D12_SHADER_BYTECODE              > ds;
+    D3DPipelineStreamSubobject< D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_GS,                     D3D12_SHADER_BYTECODE              > gs;
+    D3DPipelineStreamSubobject< D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_PS,                     D3D12_SHADER_BYTECODE              > ps;
+    D3DPipelineStreamSubobject< D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_STREAM_OUTPUT,          D3D12_STREAM_OUTPUT_DESC           > streamOutput;
+    D3DPipelineStreamSubobject< D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_BLEND,                  D3D12_BLEND_DESC                   > blendDesc;
+    D3DPipelineStreamSubobject< D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_SAMPLE_MASK,            UINT                               > sampleMask;
+    D3DPipelineStreamSubobject< D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RASTERIZER,             D3D12_RASTERIZER_DESC              > rasterizerDesc;
+    D3DPipelineStreamSubobject< D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DEPTH_STENCIL,          D3D12_DEPTH_STENCIL_DESC           > depthStencilDesc;
+    D3DPipelineStreamSubobject< D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_INPUT_LAYOUT,           D3D12_INPUT_LAYOUT_DESC            > inputLayout;
+    D3DPipelineStreamSubobject< D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_IB_STRIP_CUT_VALUE,     D3D12_INDEX_BUFFER_STRIP_CUT_VALUE > ibStripCut;
+    D3DPipelineStreamSubobject< D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_PRIMITIVE_TOPOLOGY,     D3D12_PRIMITIVE_TOPOLOGY_TYPE      > primitiveTopology;
+    D3DPipelineStreamSubobject< D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RENDER_TARGET_FORMATS,  D3D12_RT_FORMAT_ARRAY              > renderTargetFormats;
+    D3DPipelineStreamSubobject< D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DEPTH_STENCIL_FORMAT,   DXGI_FORMAT                        > depthStencilFormat;
+    D3DPipelineStreamSubobject< D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_SAMPLE_DESC,            DXGI_SAMPLE_DESC                   > sampleDesc;
+    D3DPipelineStreamSubobject< D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_NODE_MASK,              UINT                               > nodeMask; // Required in streamed-PSOs
+    D3DPipelineStreamSubobject< D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_FLAGS,                  D3D12_PIPELINE_STATE_FLAGS         > flags;
+    D3DPipelineStreamSubobject< D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_CACHED_PSO,             D3D12_CACHED_PIPELINE_STATE        > cachedPSO;
+    D3DPipelineStreamSubobject< D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_VIEW_INSTANCING,        D3D12_VIEW_INSTANCING_DESC         > viewInstancing;
+};
+
+ComPtr<ID3D12PipelineState> D3D12GraphicsPSO::CreateNativePSOWithStreamDesc(
+    ID3D12Device2*                              device,
+    const D3D12_GRAPHICS_PIPELINE_STATE_DESC&   desc,
+    UINT                                        numViews,
+    const char*                                 debugName)
+{
+    /* Route view instance i to render-target array layer i (viewport array index stays 0) */
+    LLGL_ASSERT(numViews <= D3D12_MAX_VIEW_INSTANCE_COUNT, "number of views (%u) exceeds D3D12_MAX_VIEW_INSTANCE_COUNT (%u)", numViews, static_cast<UINT>(D3D12_MAX_VIEW_INSTANCE_COUNT));
+    D3D12_VIEW_INSTANCE_LOCATION viewInstanceLocations[D3D12_MAX_VIEW_INSTANCE_COUNT] = {};
+    for_range(i, numViews)
+    {
+        viewInstanceLocations[i].ViewportArrayIndex     = 0;
+        viewInstanceLocations[i].RenderTargetArrayIndex = i;
+    }
+
+    /* Translate the equivalent graphics PSO descriptor into a pipeline state stream and append view instancing */
+    D3DGraphicsPipelineStream stateDesc = {};
+
+    stateDesc.nodeMask              = desc.NodeMask;
+    stateDesc.rootSignature         = desc.pRootSignature;
+    stateDesc.vs                    = desc.VS;
+    stateDesc.hs                    = desc.HS;
+    stateDesc.ds                    = desc.DS;
+    stateDesc.gs                    = desc.GS;
+    stateDesc.ps                    = desc.PS;
+    stateDesc.streamOutput          = desc.StreamOutput;
+    stateDesc.blendDesc             = desc.BlendState;
+    stateDesc.sampleMask            = desc.SampleMask;
+    stateDesc.rasterizerDesc        = desc.RasterizerState;
+    stateDesc.depthStencilDesc      = desc.DepthStencilState;
+    stateDesc.inputLayout           = desc.InputLayout;
+    stateDesc.ibStripCut            = desc.IBStripCutValue;
+    stateDesc.primitiveTopology     = desc.PrimitiveTopologyType;
+
+    D3D12_RT_FORMAT_ARRAY rtvFormats = {};
+    {
+        rtvFormats.NumRenderTargets = desc.NumRenderTargets;
+        for_range(i, D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT)
+            rtvFormats.RTFormats[i] = desc.RTVFormats[i];
+    }
+    stateDesc.renderTargetFormats = rtvFormats;
+
+    stateDesc.depthStencilFormat    = desc.DSVFormat;
+    stateDesc.sampleDesc            = desc.SampleDesc;
+    stateDesc.flags                 = desc.Flags;
+    stateDesc.cachedPSO             = desc.CachedPSO;
+
+    D3D12_VIEW_INSTANCING_DESC viewInstancingDesc = {};
+    {
+        viewInstancingDesc.ViewInstanceCount        = numViews;
+        viewInstancingDesc.pViewInstanceLocations   = viewInstanceLocations;
+        viewInstancingDesc.Flags                    = D3D12_VIEW_INSTANCING_FLAG_NONE;
+    }
+    stateDesc.viewInstancing        = viewInstancingDesc;
+
+    D3D12_PIPELINE_STATE_STREAM_DESC psoStreamDesc;
+    {
+        psoStreamDesc.SizeInBytes                   = sizeof(stateDesc);
+        psoStreamDesc.pPipelineStateSubobjectStream = &stateDesc;
+    }
+    ComPtr<ID3D12PipelineState> pipelineState;
+    HRESULT hr = device->CreatePipelineState(&psoStreamDesc, IID_PPV_ARGS(pipelineState.ReleaseAndGetAddressOf()));
+    if (FAILED(hr))
+    {
+        GetMutableReport().Errorf("Failed to create D3D12 graphics pipeline state [%s] with stream descriptor (HRESULT = %s)\n", GetOptionalDebugName(debugName), DXErrorToStrOrHex(hr));
+        return nullptr;
+    }
+    return pipelineState;
+}
+
+#endif // /LLGL_D3D12_ENABLE_FEATURELEVEL
 
 
 } // /namespace LLGL

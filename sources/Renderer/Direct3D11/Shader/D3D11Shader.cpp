@@ -8,13 +8,17 @@
 #include "D3D11Shader.h"
 #include "../D3D11Types.h"
 #include "../D3D11ObjectUtils.h"
+#include "../RenderState/D3D11GraphicsPSOBase.h"
 #include "../../DXCommon/DXShaderReflection.h"
+#include "../../DXCommon/DXIncludeHandler.h"
 #include "../../../Core/CoreUtils.h"
 #include "../../../Core/StringUtils.h"
 #include "../../../Core/ReportUtils.h"
 #include "../../../Core/Assertion.h"
+#include <LLGL/VertexAttribute.h>
 #include <LLGL/Utils/TypeNames.h>
 #include <LLGL/Utils/ForRange.h>
+#include <LLGL/Blob.h>
 #include <algorithm>
 #include <d3dcompiler.h>
 
@@ -78,7 +82,13 @@ bool D3D11Shader::BuildShader(ID3D11Device* device, const ShaderDescriptor& shad
         return LoadBinary(device, shaderDesc);
 }
 
-bool D3D11Shader::BuildProxyGeometryShader(ID3D11Device* device, const ShaderDescriptor& shaderDesc, ComPtr<ID3D11GeometryShader>& outProxyGeomtryShader)
+LLGL_DEPRECATED_IGNORE_PUSH()
+
+bool D3D11Shader::BuildProxyGeometryShader(
+    ID3D11Device*                   device,
+    const ShaderDescriptor&         shaderDesc,
+    ComPtr<ID3D11GeometryShader>&   outProxyGeometryShader,
+    UINT                            rasterizedStream)
 {
     /*
     Pass vertex shader bytecode into ID3D11Device::CreateGeometryShaderWithStreamOutput().
@@ -89,12 +99,13 @@ bool D3D11Shader::BuildProxyGeometryShader(ID3D11Device* device, const ShaderDes
         ShaderType::Geometry,
         GetByteCode(),
         shaderDesc.vertex.outputAttribs.size(),
-        shaderDesc.vertex.outputAttribs.data()
+        shaderDesc.vertex.outputAttribs.data(),
+        rasterizedStream
     );
 
     if (geometryShader)
     {
-        geometryShader.As<ID3D11GeometryShader>(&outProxyGeomtryShader);
+        geometryShader.As<ID3D11GeometryShader>(&outProxyGeometryShader);
         return true;
     }
 
@@ -106,33 +117,25 @@ bool D3D11Shader::BuildProxyGeometryShader(ID3D11Device* device, const ShaderDes
  * ======= Private: =======
  */
 
-// Converts a vertex attribute to a D3D stream-output entry
-static void ConvertSODeclEntry(D3D11_SO_DECLARATION_ENTRY& dst, const VertexAttribute& src)
-{
-    const char* systemValueSemantic = DXTypes::SystemValueToString(src.systemValue);
-    dst.Stream          = 0; //TODO: not sure what Stream refers to here, since OutputSlot is already used for 
-    dst.SemanticName    = (systemValueSemantic != nullptr ? systemValueSemantic : src.name.c_str());
-    dst.SemanticIndex   = src.semanticIndex;
-    dst.StartComponent  = 0;
-    dst.ComponentCount  = GetFormatAttribs(src.format).components;
-    dst.OutputSlot      = src.slot;
-}
-
 // see https://msdn.microsoft.com/en-us/library/windows/desktop/dd607324(v=vs.85).aspx
 bool D3D11Shader::CompileSource(ID3D11Device* device, const ShaderDescriptor& shaderDesc)
 {
     /* Get source code */
-    std::string fileContent;
+    Blob        fileContent;
     const char* sourceCode      = nullptr;
     SIZE_T      sourceLength    = 0;
     const char* sourceName      = nullptr;
 
     if (shaderDesc.sourceType == ShaderSourceType::CodeFile)
     {
-        fileContent     = ReadFileString(shaderDesc.source);
-        sourceCode      = fileContent.c_str();
-        sourceLength    = fileContent.size();
-        sourceName      = shaderDesc.debugName != nullptr ? shaderDesc.debugName : shaderDesc.source;
+        fileContent = Blob::CreateFromFile(shaderDesc.source, true);
+        const StringView fileContentString = fileContent.AsStringView();
+        if (!fileContentString.empty())
+        {
+            sourceCode      = fileContentString.data();
+            sourceLength    = fileContentString.size();
+            sourceName      = shaderDesc.debugName != nullptr ? shaderDesc.debugName : shaderDesc.source;
+        }
     }
     else
     {
@@ -153,12 +156,13 @@ bool D3D11Shader::CompileSource(ID3D11Device* device, const ShaderDescriptor& sh
 
     /* Compile shader code */
     ComPtr<ID3DBlob> errors;
+    DXIncludeHandler includeHandler{ shaderDesc.includeHandler, report_ };
     HRESULT hr = D3DCompile(
         sourceCode,
         sourceLength,
         sourceName,                         // LPCSTR               pSourceName
         defines,                            // D3D_SHADER_MACRO*    pDefines
-        D3D_COMPILE_STANDARD_FILE_INCLUDE,  // ID3DInclude*         pInclude
+        includeHandler.GetSelfOrDefault(),  // ID3DInclude*         pInclude
         entry,                              // LPCSTR               pEntrypoint
         target,                             // LPCSTR               pTarget
         DXGetFxcCompilerFlags(flags),       // UINT                 Flags1
@@ -182,7 +186,7 @@ bool D3D11Shader::LoadBinary(ID3D11Device* device, const ShaderDescriptor& shade
     if (shaderDesc.sourceType == ShaderSourceType::BinaryFile)
     {
         /* Load binary code from file */
-        byteCode_ = DXCreateBlob(ReadFileBuffer(shaderDesc.source));
+        byteCode_ = DXCreateBlob(Blob::CreateFromFile(shaderDesc.source));
     }
     else
     {
@@ -200,6 +204,8 @@ bool D3D11Shader::LoadBinary(ID3D11Device* device, const ShaderDescriptor& shade
     report_.Errorf("%s shader error: missing DXBC bytecode\n", ToString(shaderDesc.type));
     return false;
 }
+
+LLGL_DEPRECATED_IGNORE_POP()
 
 ComPtr<ID3D11DeviceChild> D3D11Shader::CreateNativeShaderFromBlob(
     ID3D11Device*           device,
@@ -245,22 +251,14 @@ ComPtr<ID3D11DeviceChild> D3D11Shader::CreateNativeShaderFromBlob(
         case ShaderType::Geometry:
         {
             ComPtr<ID3D11GeometryShader> geometryShader;
-            if (streamOutputAttribs != nullptr && numStreamOutputAttribs > 0)
+            if ((streamOutputAttribs != nullptr && numStreamOutputAttribs > 0) || rasterizedStream == D3D11_SO_NO_RASTERIZED_STREAM)
             {
                 /* Initialize output elements for geometry shader with stream-output */
-                std::vector<D3D11_SO_DECLARATION_ENTRY> outputElements;
-                outputElements.resize(numStreamOutputAttribs);
-
+                DynamicVector<D3D11_SO_DECLARATION_ENTRY> outputElements;
                 UINT bufferStrides[D3D11_SO_BUFFER_SLOT_COUNT];
                 UINT numBufferStrides = 0;
 
-                for_range(i, numStreamOutputAttribs)
-                {
-                    ConvertSODeclEntry(outputElements[i], streamOutputAttribs[i]);
-                    LLGL_ASSERT(outputElements[i].OutputSlot < D3D11_SO_BUFFER_SLOT_COUNT); //TODO: replace with error report
-                    bufferStrides[outputElements[i].OutputSlot] = streamOutputAttribs[i].stride;
-                    numBufferStrides = std::max<UINT>(numBufferStrides, outputElements[i].OutputSlot + 1);
-                }
+                D3D11GraphicsPSOBase::BuildStreamOutput({ streamOutputAttribs, numStreamOutputAttribs }, outputElements, bufferStrides, numBufferStrides);
 
                 /* Create geometry shader with stream-output declaration */
                 HRESULT hr = device->CreateGeometryShaderWithStreamOutput(
@@ -270,7 +268,7 @@ ComPtr<ID3D11DeviceChild> D3D11Shader::CreateNativeShaderFromBlob(
                     static_cast<UINT>(outputElements.size()),
                     bufferStrides,
                     numBufferStrides,
-                    0,//rasterizedStream,
+                    rasterizedStream,
                     classLinkage,
                     &geometryShader
                 );
@@ -424,7 +422,7 @@ HRESULT D3D11Shader::ReflectConstantBuffers(std::vector<D3D11ConstantBufferRefle
             if (FAILED(hr))
                 return hr;
 
-            std::vector<D3D11ConstantReflection> fieldsInfo;
+            std::vector<DXConstantReflection> fieldsInfo;
 
             for_range(fieldIndex, shaderBufferDesc.Variables)
             {
@@ -438,7 +436,23 @@ HRESULT D3D11Shader::ReflectConstantBuffers(std::vector<D3D11ConstantBufferRefle
                 if (FAILED(hr))
                     return hr;
 
-                fieldsInfo.push_back(D3D11ConstantReflection{ fieldDesc.Name, fieldDesc.StartOffset, fieldDesc.Size });
+                if ((fieldDesc.uFlags & D3D_SVF_USED) == 0)
+                    continue;
+
+                /* Get type reflection of current field */
+                DXShaderTypeReflection<ID3D11ShaderReflectionType, D3D11_SHADER_TYPE_DESC> fieldType;
+                fieldType.type = fieldReflection->GetType();
+                hr = fieldType.type->GetDesc(&(fieldType.desc));
+                if (FAILED(hr))
+                    return hr;
+
+                hr = DXReflectCbufferField<ID3D11ShaderReflectionType, D3D11_SHADER_TYPE_DESC>(
+                    fieldsInfo, fieldType, fieldDesc.StartOffset, fieldDesc.Size, fieldDesc.Name
+                );
+                if (FAILED(hr))
+                    return hr;
+
+                fieldsInfo.push_back(DXConstantReflection{ fieldDesc.Name, fieldDesc.StartOffset, fieldDesc.Size });
             }
 
             /* Write reflection output */

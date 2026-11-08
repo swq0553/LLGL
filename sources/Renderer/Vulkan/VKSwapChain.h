@@ -15,6 +15,7 @@
 #include "VKCore.h"
 #include "VKPtr.h"
 #include "RenderState/VKRenderPass.h"
+#include "Command/VKCommandQueue.h"
 #include "Texture/VKDepthStencilBuffer.h"
 #include "Texture/VKColorBuffer.h"
 #include <memory>
@@ -43,6 +44,7 @@ class VKSwapChain final : public SwapChain
             VkPhysicalDevice                physicalDevice,
             VkDevice                        device,
             VKDeviceMemoryManager&          deviceMemoryMngr,
+            const VKSharedCommandQueueSPtr& graphicsQueue,
             const SwapChainDescriptor&      desc,
             const std::shared_ptr<Surface>& surface,
             const RendererInfo&             rendererInfo
@@ -94,7 +96,7 @@ class VKSwapChain final : public SwapChain
 
     private:
 
-        bool ResizeBuffersPrimary(const Extent2D& resolution) override;
+        Extent2D ResizeBuffersPrimary(const Extent2D& resolution) override;
 
         void CreateGpuSemaphore(VKPtr<VkSemaphore>& semaphore);
         void CreateGpuFence(VKPtr<VkFence>& fence);
@@ -115,16 +117,17 @@ class VKSwapChain final : public SwapChain
         void CreateResolutionDependentResources(const Extent2D& resolution);
 
         VkSurfaceFormatKHR PickSwapSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& surfaceFormats) const;
-        VkPresentModeKHR PickSwapPresentMode(const std::vector<VkPresentModeKHR>& presentModes, std::uint32_t vsyncInterval) const;
         VkExtent2D PickSwapExtent(const VkSurfaceCapabilitiesKHR& surfaceCaps, const Extent2D& resolution) const;
-        VkFormat PickDepthStencilFormat(int depthBits, int stencilBits) const;
+        VkFormat PickDepthStencilFormat(const SwapChainDescriptor& desc) const;
         std::uint32_t PickSwapChainSize(std::uint32_t swapBuffers) const;
 
         void AcquireNextColorBuffer();
 
-    private:
+        // Recreates the surface, swap-chain, and resolution-dependent resources after the
+        // swap-chain became out-of-date (e.g. resize, DPI change, or driver-reported staleness).
+        void RecreateSwapChain();
 
-        static constexpr std::uint32_t maxNumFramesInFlight = 3;
+    private:
 
         VkInstance                          instance_                                   = VK_NULL_HANDLE;
         VkPhysicalDevice                    physicalDevice_                             = VK_NULL_HANDLE;
@@ -138,6 +141,7 @@ class VKSwapChain final : public SwapChain
         VKPtr<VkSwapchainKHR>               swapChain_;
         VKRenderPass                        swapChainRenderPass_;
         VkSurfaceFormatKHR                  swapChainFormat_                            = {};
+        VkFormat                            requestedColorFormat_ = VK_FORMAT_UNDEFINED; // SwapChainDescriptor::colorFormat; Undefined = pick automatically
         std::uint32_t                       swapChainSamples_                           = 1;
         VkExtent2D                          swapChainExtent_                            = { 0, 0 };
         std::vector<VkImage>                swapChainImages_;
@@ -149,18 +153,19 @@ class VKSwapChain final : public SwapChain
         std::uint32_t                       currentColorBuffer_                         = 0; // determined by vkAcquireNextImageKHR
         std::uint32_t                       currentFrameInFlight_                       = 0; // current index for maximum frames in flight
         std::uint32_t                       vsyncInterval_                              = 0;
+        bool                                swapChainOutOfDate_                         = false; // set when acquire/present report the swap-chain as stale
 
         VKRenderPass                        secondaryRenderPass_;
         VkFormat                            depthStencilFormat_                         = VK_FORMAT_UNDEFINED;
         VKDepthStencilBuffer                depthStencilBuffer_;
         std::vector<VKColorBuffer>          colorBuffers_;
 
-        VkQueue                             graphicsQueue_                              = VK_NULL_HANDLE;
+        VKSharedCommandQueueSPtr            graphicsQueue_;
         VkQueue                             presentQueue_                               = VK_NULL_HANDLE;
 
-        VKPtr<VkSemaphore>                  imageAvailableSemaphore_[maxNumFramesInFlight];
-        VKPtr<VkSemaphore>                  renderFinishedSemaphore_[maxNumFramesInFlight];
-        VKPtr<VkFence>                      inFlightFences_[maxNumFramesInFlight];
+        std::vector<VKPtr<VkSemaphore>>     imageAvailableSemaphore_;
+        std::vector<VKPtr<VkSemaphore>>     renderFinishedSemaphore_;
+        std::vector<VKPtr<VkFence>>         inFlightFences_;
 
 };
 

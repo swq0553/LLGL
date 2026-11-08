@@ -28,7 +28,6 @@
 
 #include "../Buffer/GLBufferWithVAO.h"
 #include "../Buffer/GLBufferWithXFB.h"
-#include "../Buffer/GLBufferArrayWithVAO.h"
 
 #include "../RenderState/GLStateManager.h"
 #include "../RenderState/GLPipelineState.h"
@@ -53,7 +52,7 @@ static std::size_t ExecuteGLCommand(const GLOpcode opcode, const void* pc, GLSta
         case GLOpcodeBufferSubData:
         {
             auto cmd = static_cast<const GLCmdBufferSubData*>(pc);
-            cmd->buffer->BufferSubData(cmd->offset, cmd->size, cmd + 1);
+            cmd->buffer->BufferSubData(cmd->offset, cmd->size, cmd + 1, true);
             return (sizeof(*cmd) + cmd->size);
         }
         case GLOpcodeCopyBufferSubData:
@@ -201,12 +200,6 @@ static std::size_t ExecuteGLCommand(const GLOpcode opcode, const void* pc, GLSta
             cmd->vertexArray->Bind(*stateMngr);
             return sizeof(*cmd);
         }
-        case GLOpcodeBuildVertexArray:
-        {
-            auto cmd = static_cast<const GLCmdBuildVertexArray*>(pc);
-            cmd->bufferWithVAO->BuildVertexArray(ArrayView<GLVertexAttribute>{ reinterpret_cast<const GLVertexAttribute*>(cmd + 1), cmd->numVertexAttribs });
-            return (sizeof(*cmd) + sizeof(GLVertexAttribute)*cmd->numVertexAttribs);
-        }
         case GLOpcodeBindElementArrayBufferToVAO:
         {
             auto cmd = static_cast<const GLCmdBindElementArrayBufferToVAO*>(pc);
@@ -289,6 +282,11 @@ static std::size_t ExecuteGLCommand(const GLOpcode opcode, const void* pc, GLSta
             auto cmd = static_cast<const GLCmdBindPipelineState*>(pc);
             cmd->pipelineState->Bind(*stateMngr);
             return sizeof(*cmd);
+        }
+        case GLOpcodeFlushDeferredShaderPipeline:
+        {
+            stateMngr->FlushDeferredShaderPipeline();
+            return 0;
         }
         case GLOpcodeSetBlendColor:
         {
@@ -444,7 +442,7 @@ static std::size_t ExecuteGLCommand(const GLOpcode opcode, const void* pc, GLSta
         case GLOpcodeDrawTransformFeedback:
         {
             auto cmd = static_cast<const GLCmdDrawTransformFeedback*>(pc);
-            #if LLGL_GLEXT_TRNASFORM_FEEDBACK2
+            #if LLGL_GLEXT_TRANSFORM_FEEDBACK2
             glDrawTransformFeedback(cmd->mode, cmd->xfbID);
             #endif
             return sizeof(*cmd);

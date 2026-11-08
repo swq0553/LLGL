@@ -27,15 +27,35 @@ namespace LLGL
 {
 
 
+static const D3D12RenderPass* GetD3DRenderPass(const RenderPass* renderPass)
+{
+    return (renderPass != nullptr ? LLGL_CAST(const D3D12RenderPass*, renderPass) : nullptr);
+}
+
+// Resolves the multiview view count from an explicit render pass (if any) or RenderTargetDescriptor::views.
+static UINT ResolveNumViews(const RenderTargetDescriptor& desc)
+{
+    /* An explicit render pass carries the view count; otherwise it comes from RenderTargetDescriptor::views */
+    if (auto* renderPassD3D = GetD3DRenderPass(desc.renderPass))
+        return renderPassD3D->GetNumViews();
+    else
+        return (desc.views > 1 ? desc.views : 1);
+}
+
 D3D12RenderTarget::D3D12RenderTarget(D3D12Device& device, const RenderTargetDescriptor& desc) :
     resolution_ { desc.resolution }
 {
     ColorFormatVector colorFormats;
     const UINT numColorFormats = GatherAttachmentFormats(device, desc, colorFormats);
 
+    // Resolve the multiview view count: from an explicit render pass if given, otherwise from
+    // RenderTargetDescriptor::views. The render target always exposes its own default render pass, so that pass
+    // carries the view count for the view-instanced PSO, and the RTVs/DSVs expose that many array layers.
+    const UINT numViews = ResolveNumViews(desc);
+
     CreateDescriptorHeaps(device.GetNative(), numColorFormats);
-    CreateAttachments(device.GetNative(), desc, colorFormats);
-    defaultRenderPass_.BuildAttachments(numColorFormats, colorFormats.data(), depthStencilFormat_, sampleDesc_);
+    CreateAttachments(device.GetNative(), desc, colorFormats, numViews);
+    defaultRenderPass_.BuildAttachments(numColorFormats, colorFormats.data(), depthStencilFormat_, sampleDesc_, numViews);
 
     if (desc.debugName != nullptr)
         SetDebugName(desc.debugName);
@@ -102,6 +122,21 @@ void D3D12RenderTarget::ResolveSubresources(D3D12CommandContext& commandContext)
                 target.format
             );
         }
+
+        #if LLGL_D3D12_ENABLE_FEATURELEVEL >= 1
+        /* Resolve depth plane; D3D12 has no resolve mode that takes a single sample, so take the minimum */
+        if (depthStencilResolveTarget_.resolveDstTexture != nullptr)
+        {
+            commandContext.ResolveSubresourceRegion(
+                *depthStencilResolveTarget_.resolveDstTexture,
+                depthStencilResolveTarget_.resolveDstSubresource,
+                *depthStencil_,
+                depthStencilResolveTarget_.multiSampledSrcSubresource,
+                depthStencilResolveTarget_.format,
+                D3D12_RESOLVE_MODE_MIN
+            );
+        }
+        #endif
     }
     else
     {
@@ -196,7 +231,7 @@ UINT D3D12RenderTarget::GatherAttachmentFormats(D3D12Device& device, const Rende
     return static_cast<UINT>(outColorFormats.size());
 }
 
-void D3D12RenderTarget::CreateDescriptorHeaps(ID3D12Device* device, const UINT numColorTargets)
+void D3D12RenderTarget::CreateDescriptorHeaps(ID3D12Device* device, UINT numColorTargets)
 {
     /* Create RTV descriptor heap */
     if (numColorTargets > 0)
@@ -225,23 +260,23 @@ void D3D12RenderTarget::CreateDescriptorHeaps(ID3D12Device* device, const UINT n
     }
 }
 
-static const D3D12RenderPass* GetD3DRenderPass(const RenderPass* renderPass)
-{
-    return (renderPass != nullptr ? LLGL_CAST(const D3D12RenderPass*, renderPass) : nullptr);
-}
-
 void D3D12RenderTarget::CreateAttachments(
     ID3D12Device*                   device,
     const RenderTargetDescriptor&   desc,
-    const ColorFormatVector&        colorFormats)
+    const ColorFormatVector&        colorFormats,
+    UINT                            numViews)
 {
+    /*
+    For multiview rendering each RTV/DSV must expose 'numViews' consecutive array layers (ArraySize == views),
+    so view instance i can be routed to array layer i.
+    */
     if (rtvDescHeap_)
     {
         D3D12_CPU_DESCRIPTOR_HANDLE cpuDescHandle = rtvDescHeap_->GetCPUDescriptorHandleForHeapStart();
         const UINT rtvDescSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
         for_range(i, colorFormats.size())
         {
-            CreateColorAttachment(device, desc.colorAttachments[i], desc.resolveAttachments[i], colorFormats[i], cpuDescHandle);
+            CreateColorAttachment(device, desc.colorAttachments[i], desc.resolveAttachments[i], colorFormats[i], cpuDescHandle, numViews);
             cpuDescHandle.ptr += rtvDescSize;
         }
     }
@@ -249,7 +284,9 @@ void D3D12RenderTarget::CreateAttachments(
     {
         auto* renderPassD3D = GetD3DRenderPass(desc.renderPass);
         const D3D12_DSV_FLAGS dsvFlags = (renderPassD3D != nullptr ? renderPassD3D->GetAttachmentFlagsDSV() : D3D12_DSV_FLAG_NONE);
-        CreateDepthStencilAttachment(device, desc.depthStencilAttachment, dsvDescHeap_->GetCPUDescriptorHandleForHeapStart(), dsvFlags);
+        CreateDepthStencilAttachment(device, desc.depthStencilAttachment, dsvDescHeap_->GetCPUDescriptorHandleForHeapStart(), dsvFlags, numViews);
+        if (HasMultiSampling() && desc.depthStencilResolveAttachment.texture != nullptr)
+            CreateDepthStencilResolveTarget(desc.depthStencilAttachment, desc.depthStencilResolveAttachment);
     }
 }
 
@@ -258,7 +295,8 @@ void D3D12RenderTarget::CreateColorAttachment(
     const AttachmentDescriptor&     colorAttachment,
     const AttachmentDescriptor&     resolveAttachment,
     DXGI_FORMAT                     format,
-    D3D12_CPU_DESCRIPTOR_HANDLE     cpuDescHandle)
+    D3D12_CPU_DESCRIPTOR_HANDLE     cpuDescHandle,
+    UINT                            numArrayLayers)
 {
     D3D12Resource* colorBuffer = nullptr;
 
@@ -275,11 +313,14 @@ void D3D12RenderTarget::CreateColorAttachment(
             textureD3D.GetType(),
             colorAttachment.mipLevel,
             colorAttachment.arrayLayer,
-            cpuDescHandle
+            cpuDescHandle,
+            numArrayLayers
         );
     }
     else
     {
+        /* Internal (anonymous) color buffers are single-layer and cannot be used for multiview rendering */
+        LLGL_ASSERT(numArrayLayers == 1, "multiview render target requires a texture for each color attachment");
         colorBuffer = CreateInternalTexture(
             device,
             format,
@@ -302,7 +343,8 @@ void D3D12RenderTarget::CreateDepthStencilAttachment(
     ID3D12Device*                   device,
     const AttachmentDescriptor&     depthStenciAttachment,
     D3D12_CPU_DESCRIPTOR_HANDLE     cpuDescHandle,
-    D3D12_DSV_FLAGS                 dsvFlags)
+    D3D12_DSV_FLAGS                 dsvFlags,
+    UINT                            numArrayLayers)
 {
     /* Create depth-stencil attachment */
     if (Texture* texture = depthStenciAttachment.texture)
@@ -317,11 +359,14 @@ void D3D12RenderTarget::CreateDepthStencilAttachment(
             textureD3D.GetType(),
             depthStenciAttachment.mipLevel,
             depthStenciAttachment.arrayLayer,
-            dsvFlags
+            dsvFlags,
+            numArrayLayers
         );
     }
     else
     {
+        /* Internal (anonymous) depth-stencil buffers are single-layer and cannot be used for multiview rendering */
+        LLGL_ASSERT(numArrayLayers == 1, "multiview render target requires a texture for the depth-stencil attachment");
         const CD3DX12_CLEAR_VALUE clearValue{ depthStencilFormat_, 1.0f, 0 };
         depthStencil_ = CreateInternalTexture(
             device,
@@ -379,26 +424,31 @@ void D3D12RenderTarget::CreateRenderTargetView(
     const TextureType           type,
     UINT                        mipLevel,
     UINT                        arrayLayer,
-    D3D12_CPU_DESCRIPTOR_HANDLE cpuDescHandle)
+    D3D12_CPU_DESCRIPTOR_HANDLE cpuDescHandle,
+    UINT                        numArrayLayers)
 {
     /* Initialize D3D12 RTV descriptor */
     D3D12_RENDER_TARGET_VIEW_DESC rtvDesc;
     rtvDesc.Format = DXTypes::ToDXGIFormatRTV(format);
 
+    /* For multiview rendering the view exposes 'numArrayLayers' consecutive layers (view instance i -> layer i) */
     switch (type)
     {
         case TextureType::Texture1D:
+            LLGL_ASSERT(numArrayLayers == 1, "multiview render target requires an array texture for color attachments");
             rtvDesc.ViewDimension                       = D3D12_RTV_DIMENSION_TEXTURE1D;
             rtvDesc.Texture1D.MipSlice                  = mipLevel;
             break;
 
         case TextureType::Texture2D:
+            LLGL_ASSERT(numArrayLayers == 1, "multiview render target requires an array texture for color attachments");
             rtvDesc.ViewDimension                       = D3D12_RTV_DIMENSION_TEXTURE2D;
             rtvDesc.Texture2D.MipSlice                  = mipLevel;
             rtvDesc.Texture2D.PlaneSlice                = 0;
             break;
 
         case TextureType::Texture3D:
+            LLGL_ASSERT(numArrayLayers == 1, "multiview render target is not supported for 3D textures");
             rtvDesc.ViewDimension                       = D3D12_RTV_DIMENSION_TEXTURE3D;
             rtvDesc.Texture3D.MipSlice                  = mipLevel;
             rtvDesc.Texture3D.FirstWSlice               = arrayLayer;
@@ -411,7 +461,7 @@ void D3D12RenderTarget::CreateRenderTargetView(
             rtvDesc.ViewDimension                       = D3D12_RTV_DIMENSION_TEXTURE2DARRAY;
             rtvDesc.Texture2DArray.MipSlice             = mipLevel;
             rtvDesc.Texture2DArray.FirstArraySlice      = arrayLayer;
-            rtvDesc.Texture2DArray.ArraySize            = 1;
+            rtvDesc.Texture2DArray.ArraySize            = numArrayLayers;
             rtvDesc.Texture2DArray.PlaneSlice           = 0;
             break;
 
@@ -419,17 +469,18 @@ void D3D12RenderTarget::CreateRenderTargetView(
             rtvDesc.ViewDimension                       = D3D12_RTV_DIMENSION_TEXTURE2DARRAY;
             rtvDesc.Texture1DArray.MipSlice             = mipLevel;
             rtvDesc.Texture1DArray.FirstArraySlice      = arrayLayer;
-            rtvDesc.Texture1DArray.ArraySize            = 1;
+            rtvDesc.Texture1DArray.ArraySize            = numArrayLayers;
             break;
 
         case TextureType::Texture2DMS:
+            LLGL_ASSERT(numArrayLayers == 1, "multiview render target requires an array texture for color attachments");
             rtvDesc.ViewDimension                       = D3D12_RTV_DIMENSION_TEXTURE2DMS;
             break;
 
         case TextureType::Texture2DMSArray:
             rtvDesc.ViewDimension                       = D3D12_RTV_DIMENSION_TEXTURE2DMSARRAY;
             rtvDesc.Texture2DMSArray.FirstArraySlice    = arrayLayer;
-            rtvDesc.Texture2DMSArray.ArraySize          = 1;
+            rtvDesc.Texture2DMSArray.ArraySize          = numArrayLayers;
             break;
 
     }
@@ -445,21 +496,25 @@ void D3D12RenderTarget::CreateDepthStencilView(
     const TextureType   type,
     UINT                mipLevel,
     UINT                arrayLayer,
-    D3D12_DSV_FLAGS     dsvFlags)
+    D3D12_DSV_FLAGS     dsvFlags,
+    UINT                numArrayLayers)
 {
     /* Initialize D3D12 RTV descriptor */
     D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc;
     dsvDesc.Format  = DXTypes::ToDXGIFormatDSV(format);
     dsvDesc.Flags   = dsvFlags;
 
+    /* For multiview rendering the view exposes 'numArrayLayers' consecutive layers (view instance i -> layer i) */
     switch (type)
     {
         case TextureType::Texture1D:
+            LLGL_ASSERT(numArrayLayers == 1, "multiview render target requires an array texture for the depth-stencil attachment");
             dsvDesc.ViewDimension                       = D3D12_DSV_DIMENSION_TEXTURE1D;
             dsvDesc.Texture1D.MipSlice                  = mipLevel;
             break;
 
         case TextureType::Texture2D:
+            LLGL_ASSERT(numArrayLayers == 1, "multiview render target requires an array texture for the depth-stencil attachment");
             dsvDesc.ViewDimension                       = D3D12_DSV_DIMENSION_TEXTURE2D;
             dsvDesc.Texture2D.MipSlice                  = mipLevel;
             break;
@@ -471,24 +526,25 @@ void D3D12RenderTarget::CreateDepthStencilView(
             dsvDesc.ViewDimension                       = D3D12_DSV_DIMENSION_TEXTURE2DARRAY;
             dsvDesc.Texture2DArray.MipSlice             = mipLevel;
             dsvDesc.Texture2DArray.FirstArraySlice      = arrayLayer;
-            dsvDesc.Texture2DArray.ArraySize            = 1;
+            dsvDesc.Texture2DArray.ArraySize            = numArrayLayers;
             break;
 
         case TextureType::Texture1DArray:
             dsvDesc.ViewDimension                       = D3D12_DSV_DIMENSION_TEXTURE1DARRAY;
             dsvDesc.Texture1DArray.MipSlice             = mipLevel;
             dsvDesc.Texture1DArray.FirstArraySlice      = arrayLayer;
-            dsvDesc.Texture1DArray.ArraySize            = mipLevel;
+            dsvDesc.Texture1DArray.ArraySize            = numArrayLayers;
             break;
 
         case TextureType::Texture2DMS:
+            LLGL_ASSERT(numArrayLayers == 1, "multiview render target requires an array texture for the depth-stencil attachment");
             dsvDesc.ViewDimension                       = D3D12_DSV_DIMENSION_TEXTURE2DMS;
             break;
 
         case TextureType::Texture2DMSArray:
             dsvDesc.ViewDimension                       = D3D12_DSV_DIMENSION_TEXTURE2DMSARRAY;
             dsvDesc.Texture2DMSArray.FirstArraySlice    = arrayLayer;
-            dsvDesc.Texture2DMSArray.ArraySize          = 1;
+            dsvDesc.Texture2DMSArray.ArraySize          = numArrayLayers;
             break;
     }
 
@@ -514,6 +570,30 @@ void D3D12RenderTarget::CreateResolveTarget(
         resolveTarget.format                    = format;
     }
     resolveTargets_.push_back(resolveTarget);
+}
+
+void D3D12RenderTarget::CreateDepthStencilResolveTarget(
+    const AttachmentDescriptor& depthStencilAttachment,
+    const AttachmentDescriptor& resolveAttachment)
+{
+    LLGL_ASSERT_PTR(resolveAttachment.texture);
+    LLGL_ASSERT_PTR(depthStencil_);
+
+    ValidateMipResolution(*resolveAttachment.texture, resolveAttachment.mipLevel);
+    auto& resolveTextureD3D = LLGL_CAST(D3D12Texture&, *resolveAttachment.texture);
+
+    depthStencilResolveTarget_.resolveDstTexture        = &(resolveTextureD3D.GetResource());
+    depthStencilResolveTarget_.resolveDstSubresource    = resolveTextureD3D.CalcSubresource(resolveAttachment.mipLevel, resolveAttachment.arrayLayer);
+
+    /* Internal depth-stencil buffers have a single MIP-map and array layer */
+    if (Texture* texture = depthStencilAttachment.texture)
+    {
+        auto& textureD3D = LLGL_CAST(D3D12Texture&, *texture);
+        depthStencilResolveTarget_.multiSampledSrcSubresource = textureD3D.CalcSubresource(depthStencilAttachment.mipLevel, depthStencilAttachment.arrayLayer);
+    }
+
+    /* WARP removes the device when resolving with DXGI_FORMAT_D32_FLOAT, so resolve the depth plane as DXGI_FORMAT_R32_FLOAT */
+    depthStencilResolveTarget_.format = (depthStencilFormat_ == DXGI_FORMAT_D32_FLOAT ? DXGI_FORMAT_R32_FLOAT : depthStencilFormat_);
 }
 
 

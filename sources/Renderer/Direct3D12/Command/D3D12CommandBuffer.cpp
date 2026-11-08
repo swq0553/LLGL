@@ -7,6 +7,7 @@
 
 #include "D3D12CommandBuffer.h"
 #include "D3D12SignatureFactory.h"
+#include "../D3D12SharedDeviceObjects.h"
 #include "../D3D12ObjectUtils.h"
 #include "../D3D12SwapChain.h"
 #include "../D3D12RenderSystem.h"
@@ -34,6 +35,7 @@
 
 #include "../Shader/D3D12BuiltinShaderFactory.h"
 
+#include <LLGL/Format.h>
 #include <LLGL/TypeInfo.h>
 #include <LLGL/Utils/ForRange.h>
 #include <LLGL/Backend/Direct3D12/NativeHandle.h>
@@ -54,6 +56,7 @@ namespace LLGL
 
 D3D12CommandBuffer::D3D12CommandBuffer(D3D12RenderSystem& renderSystem, const CommandBufferDescriptor& desc) :
     cmdSignatureFactory_ { &(renderSystem.GetSignatureFactory())                         },
+    sharedDeviceObjects_ { renderSystem.GetSharedDeviceObjects()                         },
     isImmediateSubmit_   { ((desc.flags & CommandBufferFlags::ImmediateSubmit) != 0)     },
     isBundle_            { ((desc.flags & CommandBufferFlags::Secondary) != 0)           },
     commandQueue_        { LLGL_CAST(D3D12CommandQueue*, renderSystem.GetCommandQueue()) }
@@ -407,13 +410,13 @@ void D3D12CommandBuffer::CopyTextureFromFramebuffer(
 void D3D12CommandBuffer::GenerateMips(Texture& texture)
 {
     auto& textureD3D = LLGL_CAST(D3D12Texture&, texture);
-    D3D12MipGenerator::Get().GenerateMips(commandContext_, textureD3D, textureD3D.GetWholeSubresource());
+    sharedDeviceObjects_->mipGenerator.GenerateMips(commandContext_, textureD3D, textureD3D.GetWholeSubresource());
 }
 
 void D3D12CommandBuffer::GenerateMips(Texture& texture, const TextureSubresource& subresource)
 {
     auto& textureD3D = LLGL_CAST(D3D12Texture&, texture);
-    D3D12MipGenerator::Get().GenerateMips(commandContext_, textureD3D, subresource);
+    sharedDeviceObjects_->mipGenerator.GenerateMips(commandContext_, textureD3D, subresource);
 }
 
 /* ----- Viewport and Scissor ----- */
@@ -457,13 +460,13 @@ void D3D12CommandBuffer::SetScissors(std::uint32_t numScissors, const Scissor* s
 
 /* ----- Clear ----- */
 
-static D3D12_CLEAR_FLAGS GetClearFlagsDSV(long flags)
+static D3D12_CLEAR_FLAGS GetClearFlagsDSV(long flags, bool hasDepth, bool hasStencil)
 {
     UINT clearFlagsDSV = 0;
 
-    if ((flags & ClearFlags::Depth) != 0)
+    if ((flags & ClearFlags::Depth) != 0 && hasDepth)
         clearFlagsDSV |= D3D12_CLEAR_FLAG_DEPTH;
-    if ((flags & ClearFlags::Stencil) != 0)
+    if ((flags & ClearFlags::Stencil) != 0 && hasStencil)
         clearFlagsDSV |= D3D12_CLEAR_FLAG_STENCIL;
 
     return static_cast<D3D12_CLEAR_FLAGS>(clearFlagsDSV);
@@ -487,8 +490,10 @@ void D3D12CommandBuffer::Clear(long flags, const ClearValue& clearValue)
 
     if (dsvDescHandle_.ptr != 0)
     {
-        /* Clear depth-stencil buffer */
-        if (D3D12_CLEAR_FLAGS clearFlagsDSV = GetClearFlagsDSV(flags))
+        /* Clear depth-stencil buffer. Mask requested aspects against what the bound DSV
+           actually has — ClearDepthStencilView rejects e.g. a stencil clear on a depth-only
+           DSV under the D3D12 debug layer. */
+        if (D3D12_CLEAR_FLAGS clearFlagsDSV = GetClearFlagsDSV(flags, hasDepthAttachment_, hasStencilAttachment_))
         {
             GetNative()->ClearDepthStencilView(
                 dsvDescHandle_,
@@ -521,8 +526,8 @@ void D3D12CommandBuffer::ClearAttachments(std::uint32_t numAttachments, const At
 
         if (dsvDescHandle_.ptr != 0)
         {
-            /* Clear depth-stencil buffer */
-            if (D3D12_CLEAR_FLAGS clearFlagsDSV = GetClearFlagsDSV(clearOp.flags))
+            /* Clear depth-stencil buffer (see Clear() above for the aspect-mask rationale). */
+            if (D3D12_CLEAR_FLAGS clearFlagsDSV = GetClearFlagsDSV(clearOp.flags, hasDepthAttachment_, hasStencilAttachment_))
             {
                 GetNative()->ClearDepthStencilView(
                     dsvDescHandle_,
@@ -540,10 +545,10 @@ void D3D12CommandBuffer::ClearAttachments(std::uint32_t numAttachments, const At
 /* ----- Buffers ------ */
 
 //private
-void D3D12CommandBuffer::SetVertexBufferAndTransitionResource(D3D12Buffer& bufferD3D)
+void D3D12CommandBuffer::SetVertexBufferAndTransitionResource(D3D12Buffer& bufferD3D, const D3D12_VERTEX_BUFFER_VIEW& bufferView)
 {
     SubmitTransitionResource(bufferD3D.GetResource(), bufferD3D.GetResource().usageState);
-    GetNative()->IASetVertexBuffers(0, 1, &(bufferD3D.GetVertexBufferView()));
+    GetNative()->IASetVertexBuffers(0, 1, &bufferView);
 
     if ((bufferD3D.GetBindFlags() & BindFlags::StreamOutputBuffer) != 0)
         soBufferIASlot0_ = &bufferD3D;
@@ -552,17 +557,51 @@ void D3D12CommandBuffer::SetVertexBufferAndTransitionResource(D3D12Buffer& buffe
 void D3D12CommandBuffer::SetVertexBuffer(Buffer& buffer)
 {
     auto& bufferD3D = LLGL_CAST(D3D12Buffer&, buffer);
-    SetVertexBufferAndTransitionResource(bufferD3D);
+    SetVertexBufferAndTransitionResource(bufferD3D, bufferD3D.GetVertexBufferView());
 }
 
-void D3D12CommandBuffer::SetVertexBuffer(Buffer& buffer, std::uint32_t numVertexAttribs, const VertexAttribute* vertexAttribs)
+void D3D12CommandBuffer::SetVertexBuffer(Buffer& buffer, std::uint32_t stride, std::uint64_t offset)
 {
-    if (numVertexAttribs > 0 && vertexAttribs != nullptr)
+    auto& bufferD3D = LLGL_CAST(D3D12Buffer&, buffer);
+    D3D12_VERTEX_BUFFER_VIEW vertexBufferView = bufferD3D.GetVertexBufferView();
+    if (vertexBufferView.SizeInBytes > offset)
     {
-        auto& bufferD3D = LLGL_CAST(D3D12Buffer&, buffer);
-        bufferD3D.UpdateVertexBufferStride(vertexAttribs[0].stride);
-        SetVertexBufferAndTransitionResource(bufferD3D);
+        vertexBufferView.BufferLocation += offset;
+        vertexBufferView.SizeInBytes    -= static_cast<UINT>(offset);
+        if (stride > 0)
+            vertexBufferView.StrideInBytes = stride;
+        SetVertexBufferAndTransitionResource(bufferD3D, vertexBufferView);
     }
+}
+
+void D3D12CommandBuffer::SetVertexBuffers(std::uint32_t numBufferViews, const VertexBufferView* bufferViews)
+{
+    if (numBufferViews > D3D12_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT)
+        return /*E_BOUNDS*/;
+
+    D3D12_VERTEX_BUFFER_VIEW bufferViewsD3D[D3D12_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT];
+
+    for_range(i, numBufferViews)
+    {
+        auto* bufferD3D = LLGL_CAST(D3D12Buffer*, bufferViews[i].buffer);
+        if (bufferD3D == nullptr)
+            return /*E_POINTER*/;
+
+        bufferViewsD3D[i] = bufferD3D->GetVertexBufferView();
+
+        if (!(bufferViewsD3D[i].SizeInBytes > bufferViews[i].offset))
+            return /*E_INVALIDARG*/;
+
+        bufferViewsD3D[i].BufferLocation += bufferViews[i].offset;
+        bufferViewsD3D[i].SizeInBytes    -= static_cast<UINT>(bufferViews[i].offset);
+
+        if (bufferViews[i].stride > 0)
+            bufferViewsD3D[i].StrideInBytes = bufferViews[i].stride;
+
+        SubmitTransitionResource(bufferD3D->GetResource(), bufferD3D->GetResource().usageState);
+    }
+
+    GetNative()->IASetVertexBuffers(0, numBufferViews, bufferViewsD3D);
 }
 
 void D3D12CommandBuffer::SetVertexBufferArray(BufferArray& bufferArray)
@@ -611,26 +650,45 @@ void D3D12CommandBuffer::SetResourceHeap(ResourceHeap& resourceHeap, std::uint32
 
     auto& resourceHeapD3D = LLGL_CAST(D3D12ResourceHeap&, resourceHeap);
 
-    /* Copy descriptors for specified set into shader-visible descriptor heap */
+    /* Copy descriptors before binding the active heaps */
+    bool isDescriptorHeapDirty = false;
+    D3D12_GPU_DESCRIPTOR_HANDLE gpuDescHandles[2] = {};
+
     for_range(i, 2)
     {
         const auto heapType = static_cast<D3D12_DESCRIPTOR_HEAP_TYPE>(i);
         if (resourceHeapD3D.GetDescriptorHeap(heapType) != nullptr)
         {
             /* Copies the entire set of descriptors from the non-shader-visible heap to the global shader-visible heap */
-            D3D12_GPU_DESCRIPTOR_HANDLE gpuDescHandle = commandContext_.CopyDescriptorsForStaging(
+            gpuDescHandles[i] = commandContext_.CopyDescriptorsForStaging(
                 heapType,
                 resourceHeapD3D.GetCPUDescriptorHandleForHeapStart(heapType, descriptorSet),
                 0,
-                resourceHeapD3D.GetNumDescriptorsPerSet(heapType)
+                resourceHeapD3D.GetNumDescriptorsPerSet(heapType),
+                &isDescriptorHeapDirty
             );
+        }
+    }
 
+    /* Rebind descriptor heaps when copying descriptors advanced either pool to a new chunk */
+    if (isDescriptorHeapDirty)
+    {
+        commandContext_.SetStagingDescriptorHeaps(
+            boundPipelineLayout_->GetDescriptorHeapSetLayout(),
+            boundPipelineLayout_->GetRootParameterIndices()
+        );
+    }
+
+    for_range(i, 2)
+    {
+        if (gpuDescHandles[i].ptr != 0)
+        {
             /* Bind descriptor table to root parameter */
             const UINT rootParamIndex = boundPipelineLayout_->GetRootParameterIndices().rootParamDescriptorHeaps[i];
             if (boundPipelineState_->GetType() == D3D12PipelineType::Compute)
-                GetNative()->SetComputeRootDescriptorTable(rootParamIndex, gpuDescHandle);
+                GetNative()->SetComputeRootDescriptorTable(rootParamIndex, gpuDescHandles[i]);
             else
-                GetNative()->SetGraphicsRootDescriptorTable(rootParamIndex, gpuDescHandle);
+                GetNative()->SetGraphicsRootDescriptorTable(rootParamIndex, gpuDescHandles[i]);
         }
     }
 
@@ -909,7 +967,7 @@ void D3D12CommandBuffer::BeginRenderCondition(QueryHeap& queryHeap, std::uint32_
     /* Set specified query as predicate */
     GetNative()->SetPredication(
         queryHeapD3D.GetResultResource(),
-        queryHeapD3D.GetAlignedBufferOffest(query),
+        queryHeapD3D.GetAlignedBufferOffset(query),
         GetDXPredicateOp(mode)
     );
 }
@@ -939,7 +997,7 @@ void D3D12CommandBuffer::BeginStreamOutput(std::uint32_t numBuffers, Buffer* con
     commandContext_.FlushResourceBarriers();
 
     /* Reset counter values in buffers by copying from a static zero-initialized buffer to the stream-output targets */
-    const D3D12BufferConstantsView srcBufferView = D3D12BufferConstantsPool::Get().FetchConstantsView(D3D12BufferConstants::ZeroUInt64);
+    const D3D12BufferConstantsView srcBufferView = sharedDeviceObjects_->bufferConstantsPool.FetchConstantsView(D3D12BufferConstants::ZeroUInt64);
 
     for_range(i, numSOBuffers_)
     {
@@ -1089,7 +1147,7 @@ void D3D12CommandBuffer::DrawStreamOutput()
 
     ID3D12PipelineState* soDrawArgsPSO = nullptr;
     ID3D12RootSignature* soDrawArgsRootSig = nullptr;
-    D3D12BuiltinShaderFactory::Get().GetBulitinPSO(D3D12BuiltinPSO::StreamOutputDrawArgsCS, soDrawArgsPSO, soDrawArgsRootSig);
+    sharedDeviceObjects_->builtinShaderFactory.GetBulitinPSO(D3D12BuiltinPSO::StreamOutputDrawArgsCS, soDrawArgsPSO, soDrawArgsRootSig);
 
     ID3D12GraphicsCommandList* commandList = commandContext_.GetCommandList();
     ID3D12PipelineState* oldGraphicsPSO = commandContext_.GetCurrentPipelineState();
@@ -1161,6 +1219,57 @@ bool D3D12CommandBuffer::GetNativeHandle(void* nativeHandle, std::size_t nativeH
         return true;
     }
     return false;
+}
+
+/* ----- Variable Rate Shading (VRS) ----- */
+
+#if LLGL_D3D12_ENABLE_FEATURELEVEL >= 1
+
+static D3D12_SHADING_RATE ToD3DShadingRate(ShadingRate shadingRate)
+{
+    switch (shadingRate)
+    {
+        case ShadingRate::Size1x1: return D3D12_SHADING_RATE_1X1;
+        case ShadingRate::Size1x2: return D3D12_SHADING_RATE_1X2;
+        case ShadingRate::Size2x1: return D3D12_SHADING_RATE_2X1;
+        case ShadingRate::Size2x2: return D3D12_SHADING_RATE_2X2;
+        case ShadingRate::Size2x4: return D3D12_SHADING_RATE_2X4;
+        case ShadingRate::Size4x2: return D3D12_SHADING_RATE_4X2;
+        case ShadingRate::Size4x4: return D3D12_SHADING_RATE_4X4;
+    }
+    LLGL_TRAP_DX_MAP(ShadingRate, shadingRate, D3D12_SHADING_RATE);
+}
+
+static D3D12_SHADING_RATE_COMBINER ToD3DShadingRateCombiner(ShadingRateOp shadingRateOp)
+{
+    switch (shadingRateOp)
+    {
+        case ShadingRateOp::Keep:       return D3D12_SHADING_RATE_COMBINER_PASSTHROUGH;
+        case ShadingRateOp::Replace:    return D3D12_SHADING_RATE_COMBINER_OVERRIDE;
+        case ShadingRateOp::Min:        return D3D12_SHADING_RATE_COMBINER_MIN;
+        case ShadingRateOp::Max:        return D3D12_SHADING_RATE_COMBINER_MAX;
+        case ShadingRateOp::Sum:        return D3D12_SHADING_RATE_COMBINER_SUM;
+    }
+    LLGL_TRAP_DX_MAP(ShadingRateOp, shadingRateOp, D3D12_SHADING_RATE_COMBINER);
+}
+
+#endif // /LLGL_D3D12_ENABLE_FEATURELEVEL
+
+void D3D12CommandBuffer::SetShadingRate(ShadingRate shadingRate)
+{
+    #if LLGL_D3D12_ENABLE_FEATURELEVEL >= 1
+    D3D12_SHADING_RATE shadingRateD3D = ToD3DShadingRate(shadingRate);
+    commandContext_.SetShadingRate(shadingRateD3D, nullptr);
+    #endif
+}
+
+void D3D12CommandBuffer::SetShadingRate(ShadingRate shadingRate, ShadingRateOp combinerOpX, ShadingRateOp combinerOpY)
+{
+    #if LLGL_D3D12_ENABLE_FEATURELEVEL >= 1
+    D3D12_SHADING_RATE shadingRateD3D = ToD3DShadingRate(shadingRate);
+    const D3D12_SHADING_RATE_COMBINER combinersD3D[2] = { ToD3DShadingRateCombiner(combinerOpX), ToD3DShadingRateCombiner(combinerOpY) };
+    commandContext_.SetShadingRate(shadingRateD3D, combinersD3D);
+    #endif
 }
 
 /* ----- Mesh pipeline ----- */
@@ -1378,8 +1487,10 @@ void D3D12CommandBuffer::BindRenderTarget(D3D12RenderTarget& renderTargetD3D)
     /* Set current back buffer as RTV and optional DSV */
     numColorBuffers_ = renderTargetD3D.GetNumColorAttachments();
 
-    rtvDescHandle_ = renderTargetD3D.GetCPUDescriptorHandleForRTV();
-    dsvDescHandle_ = renderTargetD3D.GetCPUDescriptorHandleForDSV();
+    rtvDescHandle_          = renderTargetD3D.GetCPUDescriptorHandleForRTV();
+    dsvDescHandle_          = renderTargetD3D.GetCPUDescriptorHandleForDSV();
+    hasDepthAttachment_     = renderTargetD3D.HasDepthAttachment();
+    hasStencilAttachment_   = renderTargetD3D.HasStencilAttachment();
 
     if (dsvDescHandle_.ptr != 0)
         GetNative()->OMSetRenderTargets(numColorBuffers_, &rtvDescHandle_, TRUE, &dsvDescHandle_);
@@ -1402,8 +1513,10 @@ void D3D12CommandBuffer::BindSwapChain(D3D12SwapChain& swapChainD3D, std::uint32
     /* Set current back buffer as RTV and optional DSV */
     numColorBuffers_ = 1;
 
-    rtvDescHandle_ = swapChainD3D.GetCPUDescriptorHandleForRTV(currentColorBuffer_);
-    dsvDescHandle_ = swapChainD3D.GetCPUDescriptorHandleForDSV();
+    rtvDescHandle_          = swapChainD3D.GetCPUDescriptorHandleForRTV(currentColorBuffer_);
+    dsvDescHandle_          = swapChainD3D.GetCPUDescriptorHandleForDSV();
+    hasDepthAttachment_     = swapChainD3D.HasDepthBuffer();
+    hasStencilAttachment_   = (hasDepthAttachment_ && IsStencilFormat(swapChainD3D.GetDepthStencilFormat()));
 
     if (dsvDescHandle_.ptr != 0)
         GetNative()->OMSetRenderTargets(1, &rtvDescHandle_, FALSE, &dsvDescHandle_);
@@ -1437,8 +1550,15 @@ std::uint32_t D3D12CommandBuffer::ClearAttachmentsWithRenderPass(
         while (clearValueIndex < numColorClearValues && colorBuffers[clearValueIndex] != 0xFF)
             ++clearValueIndex;
 
-        /* Clear active DSV with specified clear value */
-        if (D3D12_CLEAR_FLAGS clearFlagsDSV = renderPassD3D.GetClearFlagsDSV())
+        /* Clear active DSV with specified clear value. Mask the render-pass-derived flags against
+           the bound DSV's actual aspects so a mismatched stencil-clear loadOp on a depth-only
+           target doesn't trip the D3D12 debug layer. */
+        D3D12_CLEAR_FLAGS clearFlagsDSV = renderPassD3D.GetClearFlagsDSV();
+        if (!hasDepthAttachment_)
+            clearFlagsDSV &= ~D3D12_CLEAR_FLAG_DEPTH;
+        if (!hasStencilAttachment_)
+            clearFlagsDSV &= ~D3D12_CLEAR_FLAG_STENCIL;
+        if (clearFlagsDSV != 0)
             ClearDepthStencilView(clearFlagsDSV, numClearValues, clearValues, clearValueIndex, numRects, rects);
     }
 

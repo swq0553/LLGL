@@ -34,9 +34,9 @@ namespace LLGL
 MTRenderSystem::MTRenderSystem(const RenderSystemDescriptor& renderSystemDesc)
 {
     if (auto* customNativeHandle = GetRendererNativeHandle<Metal::RenderSystemNativeHandle>(renderSystemDesc))
-        CreateDeviceResources(customNativeHandle->device);
+        CreateDeviceResources(renderSystemDesc.flags, customNativeHandle->device);
     else
-        CreateDeviceResources();
+        CreateDeviceResources(renderSystemDesc.flags);
 }
 
 MTRenderSystem::~MTRenderSystem()
@@ -92,10 +92,9 @@ Buffer* MTRenderSystem::CreateBuffer(const BufferDescriptor& bufferDesc, const v
     return buffers_.emplace<MTBuffer>(device_, bufferDesc, initialData);
 }
 
-BufferArray* MTRenderSystem::CreateBufferArray(std::uint32_t numBuffers, Buffer* const * bufferArray)
+BufferArray* MTRenderSystem::CreateBufferArray(ArrayView<VertexBufferView> bufferViews)
 {
-    RenderSystem::AssertCreateBufferArray(numBuffers, bufferArray);
-    return bufferArrays_.emplace<MTBufferArray>(numBuffers, bufferArray);
+    return bufferArrays_.emplace<MTBufferArray>(bufferViews);
 }
 
 void MTRenderSystem::Release(Buffer& buffer)
@@ -170,7 +169,7 @@ Texture* MTRenderSystem::CreateTexture(const TextureDescriptor& textureDesc, con
                 [blitCmdEncoder generateMipmapsForTexture:textureMT->GetNative()];
                 [blitCmdEncoder endEncoding];
             }
-            [cmdBuffer commit];
+            commandQueue_->SubmitCommandBuffer(cmdBuffer);
         }
     }
 
@@ -210,7 +209,7 @@ void MTRenderSystem::Release(Sampler& sampler)
 
 /* ----- Resource Heaps ----- */
 
-ResourceHeap* MTRenderSystem::CreateResourceHeap(const ResourceHeapDescriptor& resourceHeapDesc, const ArrayView<ResourceViewDescriptor>& initialResourceViews)
+ResourceHeap* MTRenderSystem::CreateResourceHeap(const ResourceHeapDescriptor& resourceHeapDesc, ArrayView<ResourceViewDescriptor> initialResourceViews)
 {
     return resourceHeaps_.emplace<MTResourceHeap>(resourceHeapDesc, initialResourceViews);
 }
@@ -220,7 +219,7 @@ void MTRenderSystem::Release(ResourceHeap& resourceHeap)
     resourceHeaps_.erase(&resourceHeap);
 }
 
-std::uint32_t MTRenderSystem::WriteResourceHeap(ResourceHeap& resourceHeap, std::uint32_t firstDescriptor, const ArrayView<ResourceViewDescriptor>& resourceViews)
+std::uint32_t MTRenderSystem::WriteResourceHeap(ResourceHeap& resourceHeap, std::uint32_t firstDescriptor, ArrayView<ResourceViewDescriptor> resourceViews)
 {
     auto& resourceHeapMT = LLGL_CAST(MTResourceHeap&, resourceHeap);
     return resourceHeapMT.WriteResourceViews(firstDescriptor, resourceViews);
@@ -352,17 +351,43 @@ bool MTRenderSystem::GetNativeHandle(void* nativeHandle, std::size_t nativeHandl
  * ======= Private: =======
  */
 
-void MTRenderSystem::CreateDeviceResources(id<MTLDevice> sharedDevice)
+id<MTLDevice> MTRenderSystem::CreateMetalDevice(long /*renderSystemFlags*/)
+{
+    id<MTLDevice> outDevice = nil;
+
+    /* Try to create default device first */
+    outDevice = MTLCreateSystemDefaultDevice();
+    #ifdef LLGL_OS_MACOS
+    if (outDevice == nil)
+    {
+        /* Otherwise, try to find headless device */
+        NSArray<id<MTLDevice>>* allDevices = MTLCopyAllDevices();
+        for (id<MTLDevice> device in allDevices)
+        {
+            if ([device isHeadless])
+            {
+                outDevice = device;
+                break;
+            }
+        }
+        [allDevices release];
+    }
+    #endif // /LLGL_OS_MACOS
+
+    return outDevice;
+}
+
+void MTRenderSystem::CreateDeviceResources(long renderSystemFlags, id<MTLDevice> sharedDevice)
 {
     if (sharedDevice != nil)
     {
-        /* Take shard Metal device and increment reference counter */
+        /* Take shared Metal device and increment reference counter */
         device_ = [sharedDevice retain];
     }
     else
     {
         /* Create Metal device */
-        device_ = MTLCreateSystemDefaultDevice();
+        device_ = CreateMetalDevice(renderSystemFlags);
         if (device_ == nil)
             LLGL_TRAP("failed to create Metal device");
     }

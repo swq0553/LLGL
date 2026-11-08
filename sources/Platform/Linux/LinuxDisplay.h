@@ -10,82 +10,32 @@
 
 
 #include <LLGL/Display.h>
-#include <memory>
-#include <X11/Xlib.h>
 
 
 namespace LLGL
 {
 
 
-class LinuxSharedX11Display;
-
-using LinuxSharedX11DisplaySPtr = std::shared_ptr<LinuxSharedX11Display>;
-
-// Helper class to handle a shared X11 display instance
-class LinuxSharedX11Display
-{
-
-    public:
-
-        LinuxSharedX11Display();
-        ~LinuxSharedX11Display();
-
-        // Returns a shared instance of the X11 display.
-        static LinuxSharedX11DisplaySPtr GetShared();
-
-        // Notify to retain a reference to libGL.so for the shared X11 display connection.
-        static void RetainLibGL();
-
-        // Returns the native X11 display.
-        inline ::Display* GetNative() const
-        {
-            return native_;
-        }
-
-    private:
-
-        ::Display* native_ = nullptr;
-
-};
-
 class LinuxDisplay : public Display
 {
 
     public:
 
-        LinuxDisplay(const std::shared_ptr<LinuxSharedX11Display>& sharedX11Display, int screenIndex);
+        virtual bool SetCursorPositionInternal(const Offset2D& position) = 0;
 
-        bool IsPrimary() const override;
+        virtual Offset2D GetCursorPositionInternal() = 0;
 
-        UTF8String GetDeviceName() const override;
+    public:
 
-        Offset2D GetOffset() const override;
-        float GetScale() const override;
-
-        bool ResetDisplayMode() override;
-        bool SetDisplayMode(const DisplayMode& displayMode) override;
-        DisplayMode GetDisplayMode() const override;
-
-        std::vector<DisplayMode> GetSupportedDisplayModes() const override;
-
-    private:
-
-        // Returns the native X11 display.
-        ::Display* GetNative() const;
-
-    private:
-
-        std::shared_ptr<LinuxSharedX11Display>  sharedX11Display_;
-        int                                     screen_             = 0;
-
+        static void ClearCache();
+    
 };
 
 
 } // /namespace LLGL
 
 
-#endif
+#endif // LLGL_LINUX_DISPLAY_H
 
 
 

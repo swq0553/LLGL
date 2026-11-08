@@ -6,8 +6,10 @@ OUTPUT_DIR="build_android"
 SKIP_VALIDATION=0
 CLEAR_CACHE=0
 ENABLE_VULKAN="OFF"
+ENABLE_OPENXR="OFF"
 ENABLE_EXAMPLES="ON"
 BUILD_TYPE="Release"
+UNITY_BUILD="OFF"
 PROJECT_ONLY=0
 STATIC_LIB="OFF"
 ANDROID_CXX_LIB="c++_shared" # c++_shared/c++_static
@@ -29,12 +31,14 @@ print_help()
     echo "  -h, --help ................ Print this help documentation and exit"
     echo "  -p, --project-only [=G] ... Build project with CMake generator (default is CodeBlocks)"
     echo "  -s, --static-lib .......... Build static lib (default is shared lib)"
+    echo "  -u, --unity-build ......... Batches up to 32 source files in a unity build"
     echo "  -v, --verbose ............. Print additional information"
     echo "  --abi=ABI ................. Set Android ABI (default is x86_64; accepts 'all')"
     echo "  --api-level=VERSION ....... Set Android API level (default is 21)"
     echo "  --apps .................... Generate Android Studio projects to build example apps (implies '--abi=all -s')"
     echo "  --gles=VER ................ Enables the maximum OpenGLES version: 300 (default), 310, or 320"
-    echo "  --vulkan .................. Include Vulkan renderer"
+    echo "  --vk, --vulkan............. Include Vulkan renderer"
+    echo "  --xr, --openxr............. Include OpenXR support (forces --vk and --api-level>=29)"
     echo "  --no-examples ............. Exclude example projects"
     echo "NOTES:"
     echo "  Default output directory is '$OUTPUT_DIR'"
@@ -60,6 +64,8 @@ for ARG in "$@"; do
     elif [ "$ARG" = "-s" ] || [ "$ARG" = "--static-lib" ]; then
         STATIC_LIB="ON"
         ANDROID_CXX_LIB="c++_static"
+    elif [ "$ARG" = "-u" ] || [ "$ARG" = "--unity-build" ]; then
+        UNITY_BUILD="ON"
     elif [ "$ARG" = "-v" ] || [ "$ARG" = "--verbose" ]; then
         VERBOSE=1
     elif [[ "$ARG" == --abi=* ]]; then
@@ -74,8 +80,11 @@ for ARG in "$@"; do
             300) GLES_VER="OpenGLES 3.0" ;;
             *) echo "Unknown GLES version: $GLES_VER_NO; Must be 320, 310, or 300"; exit 1 ;;
         esac
-    elif [ "$ARG" = "--vulkan" ]; then
+    elif [ "$ARG" = "--vk" ] || [ "$ARG" = "--vulkan" ]; then # Accept '--vulkan' for backward compatibility
         ENABLE_VULKAN="ON"
+    elif [ "$ARG" = "--xr" ] || [ "$ARG" = "--openxr" ]; then
+        ENABLE_OPENXR="ON"
+        ENABLE_VULKAN="ON" # OpenXR support currently requires Vulkan
     elif [ "$ARG" = "--no-examples" ]; then
         ENABLE_EXAMPLES="OFF"
     elif [ "$ARG" = "--apps" ]; then
@@ -95,6 +104,17 @@ if [ "$ENABLE_VULKAN" = "ON" ]; then
             echo "Clamping API level to 28 for Vulkan support (--api-level=$ANDROID_API_LEVEL)"
         fi
         ANDROID_API_LEVEL=28
+    fi
+fi
+
+# OpenXR + content-provider broker queries (used to discover the system XR runtime) work
+# best on API 30+, and the Khronos loader expects at least API 29.
+if [ "$ENABLE_OPENXR" = "ON" ]; then
+    if [ $ANDROID_API_LEVEL -lt 29 ]; then
+        if [ $VERBOSE -ne 0 ]; then
+            echo "Clamping API level to 29 for OpenXR support (--api-level=$ANDROID_API_LEVEL)"
+        fi
+        ANDROID_API_LEVEL=29
     fi
 fi
 
@@ -133,7 +153,7 @@ if [ ! -d "$OUTPUT_DIR" ]; then
     mkdir "$OUTPUT_DIR"
 fi
 
-# Checkout external depenencies
+# Checkout external dependencies
 GAUSSIAN_LIB_DIR="GaussianLib/include"
 
 if [ -f "$SOURCE_DIR/external/$GAUSSIAN_LIB_DIR/Gauss/Gauss.h" ]; then
@@ -169,9 +189,11 @@ BASE_OPTIONS=(
     -DLLGL_BUILD_RENDERER_NULL=$ENABLE_NULL
     -DLLGL_BUILD_RENDERER_VULKAN=$ENABLE_VULKAN
     -DLLGL_VK_ENABLE_SPIRV_REFLECT=$ENABLE_VULKAN
+    -DLLGL_BUILD_XR_OPENXR=$ENABLE_OPENXR
     -DLLGL_BUILD_EXAMPLES=$ENABLE_EXAMPLES
     -DLLGL_BUILD_TESTS=OFF
     -DLLGL_BUILD_STATIC_LIB=$STATIC_LIB
+    -DLLGL_UNITY_BUILD=$UNITY_BUILD
     -DGaussLib_INCLUDE_DIR:STRING="$GAUSSIAN_LIB_DIR"
     -S "$SOURCE_DIR"
 )
@@ -200,10 +222,12 @@ build_with_android_abi()
     fi
 
     if [ $PROJECT_ONLY -eq 0 ]; then
-        cmake -DCMAKE_BUILD_TYPE=$BUILD_TYPE ${OPTIONS[@]}
+        # Force Ninja: CMake's default on Windows is Visual Studio, which can't cross-compile
+        # to Android via the NDK toolchain file.
+        cmake -G Ninja -DCMAKE_BUILD_TYPE=$BUILD_TYPE "${OPTIONS[@]}"
         cmake --build "$CURRENT_OUTPUT_DIR"
     else
-        cmake ${OPTIONS[@]} -G "$GENERATOR"
+        cmake "${OPTIONS[@]}" -G "$GENERATOR"
     fi
 }
 
@@ -219,6 +243,36 @@ if [ $ANDROID_ABI = "all" ]; then
 else
     build_with_android_abi $ANDROID_ABI "$OUTPUT_DIR"
 fi
+
+copy_build_to_jnilibs()
+{
+    CURRENT_PROJECT=$1
+    APP_ROOT=$2
+    ABI=$3
+    USE_MULTI_ABI=$4
+    NEEDS_OPENXR_LOADER=$5
+
+    LIB_FILENAME="libExample_${CURRENT_PROJECT}.so"
+    if [[ "$USE_MULTI_ABI" == "1" ]]; then
+        SRC_LIB_PATH="$OUTPUT_DIR/$ABI/build"
+        OPENXR_LOADER_PATH="$OUTPUT_DIR/$ABI/_deps/openxr_sdk-build/src/loader/libopenxr_loader.so"
+    else
+        SRC_LIB_PATH="$OUTPUT_DIR/build"
+        OPENXR_LOADER_PATH="$OUTPUT_DIR/_deps/openxr_sdk-build/src/loader/libopenxr_loader.so"
+    fi
+    DST_LIB_PATH="$APP_ROOT/app/src/main/jniLibs/$ABI"
+    mkdir -p "$DST_LIB_PATH"
+    cp "$SRC_LIB_PATH/$LIB_FILENAME" "$DST_LIB_PATH/$LIB_FILENAME"
+
+    # XR projects also need to ship libopenxr_loader.so so the APK can find the runtime.
+    if [[ "$NEEDS_OPENXR_LOADER" == "1" ]]; then
+        if [ -f "$OPENXR_LOADER_PATH" ]; then
+            cp "$OPENXR_LOADER_PATH" "$DST_LIB_PATH/libopenxr_loader.so"
+        else
+            echo "Warning: OpenXR loader not found at '$OPENXR_LOADER_PATH'; APK will fail to find an XR runtime"
+        fi
+    fi
+}
 
 # Build project solutions for example apps
 generate_app_project()
@@ -249,8 +303,6 @@ generate_app_project()
     # Get destination folder
     APP_ROOT="${OUTPUT_DIR}/apps/Example_$CURRENT_PROJECT"
 
-    BIN_ROOT=${OUTPUT_DIR}/${ABI}/build
-
     # Create folder structure
     mkdir -p "$APP_ROOT"
     PLATFORM_SOURCE_DIR="$SOURCE_DIR/examples/Shared/Platform/Android"
@@ -261,13 +313,31 @@ generate_app_project()
     mkdir -p "$APP_ROOT/gradle/wrapper"
     cp -r "$PLATFORM_SOURCE_DIR/gradle/wrapper/gradle-wrapper.properties" "$APP_ROOT/gradle/wrapper/gradle-wrapper.properties"
 
+    # XR projects mark themselves with an Android.openxr file. When present, swap in the XR
+    # manifest variant (immersive_hmd feature, OPENXR permissions, broker queries, intent
+    # category) and remember to bundle the loader .so below.
+    NEEDS_OPENXR_LOADER=0
+    if [ -f "$PROJECT_SOURCE_DIR/Android.openxr" ]; then
+        NEEDS_OPENXR_LOADER=1
+        cp "$PLATFORM_SOURCE_DIR/app-xr/src/main/AndroidManifest.xml" "$APP_ROOT/app/src/main/AndroidManifest.xml"
+    fi
+
     # Copy binary files into JNI lib folders for respective ABI
-    for ABI in ${SUPPORTED_ANDROID_ABIS[@]}; do
-        LIB_FILENAME="libExample_${CURRENT_PROJECT}.so"
-        SRC_LIB_PATH="$OUTPUT_DIR/$ABI/build"
-        DST_LIB_PATH="$APP_ROOT/app/src/main/jniLibs/$ABI"
-        mkdir -p "$DST_LIB_PATH"
-        cp "$SRC_LIB_PATH/$LIB_FILENAME" "$DST_LIB_PATH/$LIB_FILENAME"
+    if [ $ANDROID_ABI = "all" ]; then
+        for ABI in ${SUPPORTED_ANDROID_ABIS[@]}; do
+            copy_build_to_jnilibs "$CURRENT_PROJECT" "$APP_ROOT" "$ABI" 1 $NEEDS_OPENXR_LOADER
+        done
+    else
+        copy_build_to_jnilibs "$CURRENT_PROJECT" "$APP_ROOT" "$ANDROID_ABI" 0 $NEEDS_OPENXR_LOADER
+    fi
+
+    # Replace default app icon if present
+    APP_ICON_TYPES=(hdpi mdpi xhdpi xxhdpi xxxhdpi)
+    for ICON_TYPE in ${APP_ICON_TYPES[@]}; do
+        PROJECT_SOURCE_ICON="$PROJECT_SOURCE_DIR/Platform/Android/mipmap-$ICON_TYPE/ic_launcher.png"
+        if [ -f "$PROJECT_SOURCE_ICON" ]; then
+            cp "$PROJECT_SOURCE_ICON" "$APP_ROOT/app/src/main/res/mipmap-$ICON_TYPE/ic_launcher.png"
+        fi
     done
 
     # Replace meta data
@@ -279,7 +349,7 @@ generate_app_project()
     ASSET_DIR="$APP_ROOT/app/src/main/assets"
     mkdir -p "$ASSET_DIR"
 
-    ASSETS_LIST_FILE=$(find "$PROJECT_SOURCE_DIR" -type f -name *.assets.txt)
+    ASSETS_LIST_FILE=$(find "$PROJECT_SOURCE_DIR" -type f -name "*.assets.txt")
     if [ -f "$ASSETS_LIST_FILE" ]; then
         # Read *.assets.txt file line-by-line into array and make sure '\r' character is not present (on Win32 platform)
         readarray -t ASSET_FILTERS < <(tr -d '\r' < "$ASSETS_LIST_FILE")
@@ -308,34 +378,54 @@ generate_app_project()
     fi
 
     # Find all shaders and copy them into app folder
-    for FILE in $PROJECT_SOURCE_DIR/*.vert \
-                $PROJECT_SOURCE_DIR/*.geom \
-                $PROJECT_SOURCE_DIR/*.tesc \
-                $PROJECT_SOURCE_DIR/*.tese \
-                $PROJECT_SOURCE_DIR/*.frag \
-                $PROJECT_SOURCE_DIR/*.comp \
-                $PROJECT_SOURCE_DIR/*.spv; do
-        if [ -f "$FILE" ]; then
-            if [ $VERBOSE -ne 0 ]; then
-                echo "Copy shader: $(basename $FILE)"
+    for SHADER_DIR in "$PROJECT_SOURCE_DIR" \
+                      "$PROJECT_SOURCE_DIR/.autogen"; do
+        for FILE in "$SHADER_DIR"/*.vert \
+                    "$SHADER_DIR"/*.geom \
+                    "$SHADER_DIR"/*.tesc \
+                    "$SHADER_DIR"/*.tese \
+                    "$SHADER_DIR"/*.frag \
+                    "$SHADER_DIR"/*.comp \
+                    "$SHADER_DIR"/*.spv; do
+            if [ -f "$FILE" ]; then
+                if [ $VERBOSE -ne 0 ]; then
+                    echo "Copy shader: $(basename $FILE)"
+                fi
+                cp "$FILE" "$ASSET_DIR/$(basename $FILE)"
             fi
-            cp "$FILE" "$ASSET_DIR/$(basename $FILE)"
-        fi
+        done
     done
 }
 
 if [ $BUILD_APPS -ne 0 ]; then
 
-    BIN_FILE_BASE="${OUTPUT_DIR}/${SUPPORTED_ANDROID_ABIS[0]}/build/libExample_"
-    BIN_FILE_BASE_LEN=${#BIN_FILE_BASE}
-    EXAMPLE_BIN_FILES=(${BIN_FILE_BASE}*.so)
-
-    for BIN_FILE in ${EXAMPLE_BIN_FILES[@]}; do
-        if { [ $BUILD_TYPE = "Debug" ] && [[ $BIN_FILE == *D.so ]] } || { [ ! $BUILD_TYPE = "Debug" ] && ! [[ $BIN_FILE == *D.so ]] }; then
-            BIN_FILE_LEN=${#BIN_FILE}
-            PROJECT_NAME=${BIN_FILE:BIN_FILE_BASE_LEN:BIN_FILE_LEN-BIN_FILE_BASE_LEN-3}
-            generate_app_project $PROJECT_NAME
+    if [ $ANDROID_ABI = "all" ]; then
+        BUILD_BASE_DIR="${OUTPUT_DIR}/${SUPPORTED_ANDROID_ABIS[0]}/build"
+        if [ ! -d "$BUILD_BASE_DIR" ]; then
+            echo "Error: Failed to find build folder: '$BUILD_BASE_DIR'"
+            exit 1
         fi
-    done
+    else
+        BUILD_BASE_DIR="${OUTPUT_DIR}/build"
+    fi
+
+    BIN_FILE_BASE="${BUILD_BASE_DIR}/libExample_"
+    BIN_FILE_BASE_LEN=${#BIN_FILE_BASE}
+
+    shopt -s nullglob # Expand glob expressions to nothing if nothing can be found
+    EXAMPLE_BIN_FILES=(${BIN_FILE_BASE}*.so)
+    shopt -u nullglob # Back to original behavior
+
+    if [ ${#EXAMPLE_BIN_FILES[@]} -eq 0 ]; then
+        echo "Error: Failed to find any builds of example projects in '${BIN_FILE_BASE}*.so'"
+    else
+        for BIN_FILE in ${EXAMPLE_BIN_FILES[@]}; do
+            if { [ $BUILD_TYPE = "Debug" ] && [[ $BIN_FILE == *D.so ]] } || { [ ! $BUILD_TYPE = "Debug" ] && ! [[ $BIN_FILE == *D.so ]] }; then
+                BIN_FILE_LEN=${#BIN_FILE}
+                PROJECT_NAME=${BIN_FILE:BIN_FILE_BASE_LEN:BIN_FILE_LEN-BIN_FILE_BASE_LEN-3}
+                generate_app_project $PROJECT_NAME
+            fi
+        done
+    fi
 
 fi

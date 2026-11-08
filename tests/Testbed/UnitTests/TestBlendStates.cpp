@@ -48,10 +48,11 @@ DEF_TEST( BlendStates )
 
     GraphicsPipelineDescriptor psoDesc;
     {
-        psoDesc.pipelineLayout  = layouts[PipelineTextured];
-        psoDesc.renderPass      = swapChain->GetRenderPass();
-        psoDesc.vertexShader    = shaders[VSTextured];
-        psoDesc.fragmentShader  = shaders[PSTextured];
+        psoDesc.pipelineLayout      = layouts[PipelineTextured];
+        psoDesc.renderPass          = swapChain->GetRenderPass();
+        psoDesc.inputVertexAttribs  = vertexFormats[VertFmtStd].attributes;
+        psoDesc.vertexShader        = shaders[VSTextured];
+        psoDesc.fragmentShader      = shaders[PSTextured];
     }
 
     BlendTargetDescriptor& target0Desc = psoDesc.blend.targets[0];
@@ -95,7 +96,7 @@ DEF_TEST( BlendStates )
 
     Texture* readbackTex = nullptr;
 
-    cmdBuffer->Begin();
+    BEGIN();
     {
         cmdBuffer->SetVertexBuffer(*meshBuffer);
         cmdBuffer->SetIndexBuffer(*meshBuffer, Format::R32UInt, mesh.indexBufferOffset);
@@ -138,7 +139,7 @@ DEF_TEST( BlendStates )
         }
         cmdBuffer->EndRenderPass();
     }
-    cmdBuffer->End();
+    END();
 
     // Match entire color buffer and create delta heat map
     const char* colorBufferName = "BlendStates";

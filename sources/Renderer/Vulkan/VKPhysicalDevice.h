@@ -16,6 +16,7 @@
 #include <vector>
 #include <set>
 #include <cstring>
+#include <functional>
 
 
 namespace LLGL
@@ -23,6 +24,69 @@ namespace LLGL
 
 
 struct VKGraphicsPipelineLimits;
+
+struct VKPhysicalDevicePropertiesExt : VkPhysicalDeviceProperties
+{
+    /* Extension based physical device properties */
+    #if VK_EXT_conservative_rasterization
+    VkPhysicalDeviceConservativeRasterizationPropertiesEXT  conservRaster;
+    #endif
+    #if VK_EXT_nested_command_buffer
+    VkPhysicalDeviceNestedCommandBufferPropertiesEXT        nestedCmdBuffer;
+    #endif
+    #if VK_EXT_transform_feedback
+    VkPhysicalDeviceTransformFeedbackPropertiesEXT          transformFeedback;
+    #endif
+    #if VK_KHR_multiview
+    VkPhysicalDeviceMultiviewPropertiesKHR                  multiview;
+    #endif
+    #if VK_KHR_fragment_shading_rate
+    VkPhysicalDeviceFragmentShadingRatePropertiesKHR        fragmentShadingRate;
+    #endif
+    #if VK_EXT_mesh_shader
+    VkPhysicalDeviceMeshShaderPropertiesEXT                 meshShader;
+    #endif
+};
+
+struct VKPhysicalDeviceFeaturesExt : VkPhysicalDeviceFeatures
+{
+    /* Extension based physical device features */
+    #if VK_EXT_nested_command_buffer
+    VkPhysicalDeviceNestedCommandBufferFeaturesEXT          nestedCmdBuffer;
+    #endif
+    #if VK_EXT_transform_feedback
+    VkPhysicalDeviceTransformFeedbackFeaturesEXT            transformFeedback;
+    #endif
+    #if VK_KHR_multiview
+    VkPhysicalDeviceMultiviewFeaturesKHR                    multiview;
+    #endif
+    #if VK_KHR_fragment_shading_rate
+    VkPhysicalDeviceFragmentShadingRateFeaturesKHR          fragmentShadingRate;
+    #endif
+    #if VK_EXT_mesh_shader
+    VkPhysicalDeviceMeshShaderFeaturesEXT                   meshShader;
+    #endif
+    #if VK_KHR_imageless_framebuffer
+    VkPhysicalDeviceImagelessFramebufferFeaturesKHR         imagelessFramebuffer;
+    #endif
+};
+
+/*
+Queries the features of the specified Vulkan physical device and builds the chained VkPhysicalDeviceFeatures2
+used at device creation: every supported core feature is enabled, plus the LLGL-used extension features whose
+extension passes 'isExtensionEnabled'. The extension feature structs live in 'outFeaturesExt' and
+'outFeatures2.pNext' is chained into them, so 'outFeaturesExt' must outlive any use of 'outFeatures2'.
+On Vulkan 1.1+ the result is consumed via 'outFeatures2' (pNext chain); on 1.0 the chain is empty and only
+'outFeatures2.features' / 'outFeaturesExt' base are filled -- follow the same pNext-or-pEnabledFeatures
+convention as VKDevice::CreateLogicalDevice. Shared by the regular render system (VKPhysicalDevice) and the
+OpenXR graphics binding (which feeds 'outFeatures2' into the VkDeviceCreateInfo for xrCreateVulkanDeviceKHR).
+*/
+void VKQueryPhysicalDeviceFeatures(
+    VkPhysicalDevice                            physicalDevice,
+    const std::function<bool(const char*)>&     isExtensionEnabled,
+    VkPhysicalDeviceFeatures2&                  outFeatures2,
+    VKPhysicalDeviceFeaturesExt&                outFeaturesExt
+);
 
 class VKPhysicalDevice
 {
@@ -32,7 +96,13 @@ class VKPhysicalDevice
         /* ----- Common ----- */
 
         // Picks the physical Vulkan device by enumerating the available devices from the specified Vulkan instance.
-        bool PickPhysicalDevice(VkInstance instance, const ArrayView<const char*>& supportedInstanceExtensions, long preferredDeviceFlags = 0);
+        bool PickPhysicalDevice(
+            VkInstance                      instance,
+            const ArrayView<const char*>&   supportedInstanceExtensions,
+            long                            preferredDeviceFlags        = 0,
+            const ArrayView<const char*>&   requiredUserExtensions      = {},
+            const ArrayView<const char*>&   optionalUserExtensions      = {}
+        );
 
         // Loads the physical Vulkan device from a custom native handle.
         void LoadPhysicalDeviceWeakRef(VkPhysicalDevice physicalDevice);
@@ -63,13 +133,13 @@ class VKPhysicalDevice
         }
 
         // Returns the Vulkan specific features of the physical device.
-        inline const VkPhysicalDeviceFeatures2& GetFeatures() const
+        inline const VKPhysicalDeviceFeaturesExt& GetFeatures() const
         {
             return features_;
         }
 
         // Returns the Vulkan specific limits of the physical device.
-        inline const VkPhysicalDeviceProperties& GetProperties() const
+        inline const VKPhysicalDevicePropertiesExt& GetProperties() const
         {
             return properties_;
         }
@@ -99,7 +169,9 @@ class VKPhysicalDevice
 
     private:
 
+        bool EnableExtension(const char* name);
         bool EnableExtensions(const char** extensions, bool required = false);
+        bool EnableExtensions(const ArrayView<const char*>& extensions, bool required = false);
 
         void QueryDeviceInfo();
         void QueryDeviceFeatures();
@@ -109,31 +181,16 @@ class VKPhysicalDevice
     private:
 
         // Main device objects
-        VkPhysicalDevice                                        physicalDevice_                 = VK_NULL_HANDLE;
-        std::vector<VkExtensionProperties>                      supportedExtensions_;
-        std::set<const char*, CStringSWO>                       supportedExtensionNames_;
-        std::vector<const char*>                                enabledExtensionNames_;
+        VkPhysicalDevice                    physicalDevice_             = VK_NULL_HANDLE;
+        std::vector<VkExtensionProperties>  supportedExtensions_;
+        std::set<const char*, CStringSWO>   supportedExtensionNames_;
+        std::vector<const char*>            enabledExtensionNames_;
 
         // Common device properties and features
-        VkPhysicalDeviceFeatures2                               features_                       = {};
-        VkPhysicalDeviceProperties                              properties_                     = {};
-        VkPhysicalDeviceMemoryProperties                        memoryProperties_               = {};
-
-        // Extension specific
-        VkPhysicalDeviceConservativeRasterizationPropertiesEXT  conservRasterProps_             = {};
-
-        #if VK_EXT_nested_command_buffer
-        VkPhysicalDeviceNestedCommandBufferFeaturesEXT          nestedCmdBufferFeatures_        = {};
-        #endif
-
-        #if VK_EXT_transform_feedback
-        VkPhysicalDeviceTransformFeedbackPropertiesEXT          transformFeedbackProps_         = {};
-        VkPhysicalDeviceTransformFeedbackFeaturesEXT            transformFeedbackFeatures_      = {};
-        #endif
-
-        #if VK_KHR_imageless_framebuffer
-        VkPhysicalDeviceImagelessFramebufferFeaturesKHR         imagelessFramebufferFeatures_   = {};
-        #endif
+        VkPhysicalDeviceFeatures2           features2_                  = {}; // Use for chaining pNext entries only
+        VKPhysicalDeviceFeaturesExt         features_                   = {};
+        VKPhysicalDevicePropertiesExt       properties_                 = {};
+        VkPhysicalDeviceMemoryProperties    memoryProperties_           = {};
 
 };
 

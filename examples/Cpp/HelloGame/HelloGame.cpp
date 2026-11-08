@@ -53,10 +53,12 @@ class Example_HelloGame : public ExampleBase
     static constexpr float  treeAnimRadius          = 0.2f;
     static constexpr int    shadowMapSize           = 512;
     static constexpr float  timeOfDayChangeSpeed    = 2.0f; // in seconds
-    static constexpr float  pointerMoveScale        = 15.0f; // percentage of largest screen dimension to move the pointer for player movemnt
+    static constexpr float  pointerMoveScale        = 15.0f; // percentage of largest screen dimension to move the pointer for player movement
     static constexpr float  jitterDelay             = 1.0f;
     static constexpr float  jitterDuration          = 1.0f;
     static constexpr float  jitterMaxAngle          = 15.0f;
+    static constexpr float  tileActivateSpeed       = 0.5f; // in seconds
+    static constexpr float  tileActivateWallHeight  = 0.3f;
 
     static constexpr float  playerMoveSpeed         = 0.25f; // in seconds
     static constexpr float  playerFallAcceleration  = 2.0f; // in units per seconds
@@ -88,8 +90,8 @@ class Example_HelloGame : public ExampleBase
         }
     };
 
-    const TimeOfDay         timeOfDayMorning        = { Gs::Vector3f{ +0.15f, -1.0f, 0.25f }, LLGL::ColorRGBf{ 1.0f, 1.0f, 1.0f }, 0.6f };
-    const TimeOfDay         timeOfDayEvening        = { Gs::Vector3f{ -0.75f, -0.7f, 2.25f }, LLGL::ColorRGBf{ 0.6f, 0.5f, 0.2f }, 0.2f };
+    TimeOfDay               timeOfDayMorning        = { Gs::Vector3f{ +0.15f, -1.0f, 0.25f }, LLGL::ColorRGBf{ 1.0f, 1.0f, 1.0f }, 0.6f };
+    TimeOfDay               timeOfDayEvening        = { Gs::Vector3f{ -0.75f, -0.7f, 2.25f }, LLGL::ColorRGBf{ 0.6f, 0.5f, 0.2f }, 0.2f };
 
     LLGL::PipelineLayout*   scenePSOLayout[2]       = {};
     LLGL::PipelineState*    scenePSO[2]             = {};
@@ -155,7 +157,7 @@ class Example_HelloGame : public ExampleBase
     }
     scene;
 
-    enum Unifom
+    enum Uniform
     {
         Uniform_worldOffset = 0,
         Uniform_bendIntensity,
@@ -180,6 +182,11 @@ class Example_HelloGame : public ExampleBase
     {
         float           wMatrix[4][3];
         float           color[4];
+
+        void SetPosY(float y)
+        {
+            wMatrix[3][1] = y;
+        }
     };
 
     // Decor for trees in the background
@@ -191,14 +198,24 @@ class Example_HelloGame : public ExampleBase
 
     struct Tile
     {
+        enum State
+        {
+            Inactive = 0,
+            Active,
+            ActiveBeginLock,
+            ActiveEndLock,
+        };
+
         Tile() :
-            instanceIndex { ~0u },
-            isActive      { 0   }
+            instanceIndex { ~0u      },
+            state         { Inactive },
+            animation     { 0.0f     }
         {
         }
 
         std::uint32_t   instanceIndex; // Index into 'meshInstances'
-        std::uint32_t   isActive : 1;
+        State           state;
+        float           animation;
 
         bool IsValid() const
         {
@@ -207,7 +224,47 @@ class Example_HelloGame : public ExampleBase
 
         bool IsActivated() const
         {
-            return (isActive != 0);
+            return (state != Inactive);
+        }
+
+        bool Activate()
+        {
+            if (IsValid() && state == Inactive)
+            {
+                state = Active;
+                return true;
+            }
+            return false;
+        }
+
+        bool Deactivate()
+        {
+            if (IsValid() && state != Inactive)
+            {
+                state = Inactive;
+                animation = 0.0f;
+                return true;
+            }
+            return false;
+        }
+
+        void StartLockAnimation()
+        {
+            if (IsValid() && state == Active)
+                state = ActiveBeginLock;
+        }
+
+        bool Animate(float dt)
+        {
+            if (IsValid() && state == ActiveBeginLock)
+            {
+                animation += dt / tileActivateSpeed;
+                if (animation < 1.0f)
+                    return true;
+                animation = 1.0f;
+                state = ActiveEndLock;
+            }
+            return false;
         }
     };
 
@@ -308,6 +365,7 @@ class Example_HelloGame : public ExampleBase
         TileGrid                walls;
         std::vector<Decor>      trees;
         std::vector<Instance>   meshInstances;
+        std::vector<Tile*>      animatedTiles; // All tiles that are currently being animated
         InstanceRange           meshInstanceDirtyRange;
         InstanceRange           tileInstanceRange;
         InstanceRange           treeInstanceRange;
@@ -317,6 +375,7 @@ class Example_HelloGame : public ExampleBase
         int                     activatedTiles              = 0;
         int                     maxTilesToActivate          = 0;
         float                   lightPhase                  = 0.0f;
+        Tile*                   lastActivatedTile           = nullptr;
 
         bool IsWall(int x, int y) const
         {
@@ -368,9 +427,8 @@ class Example_HelloGame : public ExampleBase
             Tile* tile = floor.Get(x, y);
             if (tile != nullptr && tile->IsValid())
             {
-                if (tile->isActive == 0)
+                if (tile->Activate())
                 {
-                    tile->isActive = 1;
                     Instance& instance = meshInstances[tile->instanceIndex];
                     {
                         instance.color[0] = color[0];
@@ -379,22 +437,37 @@ class Example_HelloGame : public ExampleBase
                     }
                     meshInstanceDirtyRange.Insert(tile->instanceIndex);
                     ++activatedTiles;
+                    lastActivatedTile = tile;
                     return true;
                 }
             }
             return false;
         }
 
+        void LockLastActivatedTile()
+        {
+            // Start lock animation of previoulsy activated tile
+            if (lastActivatedTile != nullptr)
+            {
+                lastActivatedTile->StartLockAnimation();
+                animatedTiles.push_back(lastActivatedTile);
+                lastActivatedTile = nullptr;
+            }
+        }
+
         void PutPlayer(Player& player)
         {
             player.Put(playerStart);
+            LockLastActivatedTile();
             ActivateTile(playerStart[0], playerStart[1], playerColor);
         }
 
         void ResetTiles()
         {
+            lastActivatedTile   = nullptr;
             activatedTiles      = 0;
             maxTilesToActivate  = 0;
+            animatedTiles.clear();
 
             for_range(row, gridSize[1])
             {
@@ -424,7 +497,65 @@ class Example_HelloGame : public ExampleBase
                         }
 
                         // Reset tile
-                        floorTile->isActive = 0;
+                        if (floorTile->Deactivate())
+                            floorInstance.SetPosY(0.0f);
+                    }
+                }
+            }
+        }
+
+        void Animate(float dt)
+        {
+            if (!animatedTiles.empty())
+            {
+                std::size_t i = 0;
+                std::size_t iEnd = animatedTiles.size() - 1;
+                while (i < animatedTiles.size())
+                {
+                    Tile* tile = animatedTiles[i];
+
+                    // Once an empty entry is reached, erase all elements until the end of the elist
+                    if (tile == nullptr)
+                    {
+                        animatedTiles.erase(animatedTiles.begin() + i, animatedTiles.end());
+                        break;
+                    }
+
+                    // Animate current tile
+                    auto AnimationWindowFunction = [](float t, float midPhase, float bounceAmplitude, unsigned numBounces) -> float
+                    {
+                        if (t < midPhase)
+                        {
+                            float phase = (t/midPhase);
+                            return phase*phase;
+                        }
+                        else
+                        {
+                            float phase = (t - midPhase)/(1.0f - midPhase);
+                            float sinePhase = phase*static_cast<float>(Gs::pi)*2.0f*static_cast<float>(numBounces);
+                            return 1.0f + std::sin(sinePhase)*bounceAmplitude*(1.0f - phase);
+                        }
+                    };
+
+                    if (tile->Animate(dt))
+                    {
+                        // Animate mesh instance position
+                        Instance& meshInstance = meshInstances[tile->instanceIndex];
+                        const float tileAnimPhase = AnimationWindowFunction(tile->animation, 0.3f, 0.3f, 2u);
+                        const float tilePosY = wallPosY * tileActivateWallHeight * tileAnimPhase;
+                        meshInstance.SetPosY(tilePosY);
+                        meshInstanceDirtyRange.Insert(tile->instanceIndex);
+
+                        // Move to next tile
+                        ++i;
+                    }
+                    else
+                    {
+                        // Swap out tile with entry at the end of the list that is non-null
+                        animatedTiles[i] = animatedTiles[iEnd];
+                        animatedTiles[iEnd] = nullptr;
+                        if (iEnd > 0)
+                            --iEnd;
                     }
                 }
             }
@@ -574,9 +705,11 @@ class Example_HelloGame : public ExampleBase
 
         void Init(const LLGL::RenderingCapabilities& caps)
         {
-            // SSBOs are not supported in ESSL for instance, so when storage buffers are not supported,
-            // we use a uniform buffer (aka constant buffer) for instances
-            isCbuffer   = !caps.features.hasStorageBuffers;
+            const bool isESSLSupported = (std::find(caps.shadingLanguages.begin(), caps.shadingLanguages.end(), LLGL::ShadingLanguage::ESSL) != caps.shadingLanguages.end());
+
+            // SSBOs are not supported in WebGL, so when storage buffers are not supported,
+            // we use a uniform buffer (aka constant buffer) for instances.
+            isCbuffer   = isESSLSupported;
             bufferLimit = (isCbuffer ? caps.limits.maxConstantBufferSize : caps.limits.maxBufferSize);
 
             #if ENABLE_VERBOSE_LOGS
@@ -602,8 +735,9 @@ class Example_HelloGame : public ExampleBase
             const std::uint64_t bufferSize = sizeof(Instance) * numInstances;
 
             sizePerSegment = std::min<std::uint64_t>(bufferLimit, (isCbuffer ? sizeof(Instance) * cbufferNumInstances : bufferSize));
-            const std::uint64_t numSegments = (bufferSize + sizePerSegment - 1) / sizePerSegment;
+            LLGL_VERIFY(sizePerSegment >= sizeof(Instance));
 
+            const std::uint64_t numSegments = (bufferSize + sizePerSegment - 1) / sizePerSegment;
             segments.resize(static_cast<std::size_t>(numSegments));
 
             for_range(i, segments.size())
@@ -768,38 +902,35 @@ public:
         ExampleBase { "LLGL Example: HelloGame" }
     {
         // Create all graphics objects
-        auto vertexFormat = CreateResources();
-        CreateShaders(vertexFormat);
+        CreateResources();
+        CreateShaders();
         CreatePipelines();
         LoadLevels();
         SelectLevel(0);
+
+        // Update vectors for projection
+        const float projZAxis = GetProjectionZAxis();
+        scene.lightDir.z *= projZAxis;
+        timeOfDayMorning.lightDir.z *= projZAxis;
+        timeOfDayEvening.lightDir.z *= projZAxis;
     }
 
 private:
 
-    LLGL::VertexFormat CreateResources()
+    void CreateResources()
     {
         // Initialize instance buffer
         instanceBuffer.Init(renderer->GetRenderingCaps());
 
-        // Specify vertex format
-        LLGL::VertexFormat vertexFormat;
-        vertexFormat.attributes =
-        {
-            LLGL::VertexAttribute{ "position", LLGL::Format::RGB32Float, /*location:*/ 0, offsetof(Vertex, position), sizeof(Vertex) },
-            LLGL::VertexAttribute{ "normal",   LLGL::Format::RGB32Float, /*location:*/ 1, offsetof(Vertex, normal  ), sizeof(Vertex) },
-            LLGL::VertexAttribute{ "texCoord", LLGL::Format::RG32Float,  /*location:*/ 2, offsetof(Vertex, texCoord), sizeof(Vertex) },
-        };
-
         // Load 3D models
         std::vector<TexturedVertex> vertices;
-        mdlPlayer   = LoadObjModel(vertices, "HelloGame_Player.obj");
-        mdlBlock    = LoadObjModel(vertices, "HelloGame_Block.obj");
-        mdlTree     = LoadObjModel(vertices, "HelloGame_Tree.obj");
-        mdlGround   = LoadObjModel(vertices, "HelloGame_Ground.obj");
+        mdlPlayer   = Load3DModel(vertices, "HelloGame/HelloGame_Player.obj");
+        mdlBlock    = Load3DModel(vertices, "HelloGame/HelloGame_Block.obj");
+        mdlTree     = Load3DModel(vertices, "HelloGame/HelloGame_Tree.obj");
+        mdlGround   = Load3DModel(vertices, "HelloGame/HelloGame_Ground.obj");
 
         // Create vertex, index, and constant buffer
-        vertexBuffer    = CreateVertexBuffer(vertices, vertexFormat);
+        vertexBuffer    = CreateVertexBuffer(vertices, sizeof(Vertex));
         cbufferScene    = CreateConstantBuffer(scene);
 
         // Load texture and sampler
@@ -856,8 +987,6 @@ private:
 
         // Pass inverse size of shadow map to shader for PCF shadow mapping
         scene.shadowSizeInv = 1.0f / static_cast<float>(shadowMapSize);
-
-        return vertexFormat;
     }
 
     static std::string BytesToString(std::uint64_t val)
@@ -874,58 +1003,18 @@ private:
         return std::string(buf);
     }
 
-    void CreateShaders(const LLGL::VertexFormat& vertexFormat)
+    void CreateShaders()
     {
-        if (Supported(LLGL::ShadingLanguage::HLSL))
-        {
-            sceneShaders.vs  = LoadShader({ LLGL::ShaderType::Vertex,   "HelloGame.hlsl", "VSInstance", "vs_5_0" }, { vertexFormat });
-            sceneShaders.ps  = LoadShader({ LLGL::ShaderType::Fragment, "HelloGame.hlsl", "PSInstance", "ps_5_0" });
+        sceneShaders.vs  = LoadVertexShader  ("HelloGame", "VSInstance", nullptr, LLGL::ShaderCompileFlags::PatchClippingOrigin);
+        sceneShaders.ps  = LoadFragmentShader("HelloGame", "PSInstance");
 
-            groundShaders.vs = LoadShader({ LLGL::ShaderType::Vertex,   "HelloGame.hlsl", "VSGround",   "vs_5_0" }, { vertexFormat });
-            groundShaders.ps = LoadShader({ LLGL::ShaderType::Fragment, "HelloGame.hlsl", "PSGround",   "ps_5_0" });
-        }
-        else if (Supported(LLGL::ShadingLanguage::GLSL))
-        {
-            sceneShaders.vs  = LoadShaderAndPatchClippingOrigin({ LLGL::ShaderType::Vertex,   "HelloGame.VSInstance.450core.vert" }, { vertexFormat });
-            sceneShaders.ps  = LoadShader                      ({ LLGL::ShaderType::Fragment, "HelloGame.PSInstance.450core.frag" });
-
-            groundShaders.vs = LoadShader({ LLGL::ShaderType::Vertex,   "HelloGame.VSGround.450core.vert" }, { vertexFormat });
-            groundShaders.ps = LoadShader({ LLGL::ShaderType::Fragment, "HelloGame.PSGround.450core.frag" });
-        }
-        else if (Supported(LLGL::ShadingLanguage::ESSL))
-        {
-            sceneShaders.vs  = LoadShaderAndPatchClippingOrigin({ LLGL::ShaderType::Vertex,   "HelloGame.VSInstance.300es.vert" }, { vertexFormat });
-            sceneShaders.ps  = LoadShader                      ({ LLGL::ShaderType::Fragment, "HelloGame.PSInstance.300es.frag" });
-
-            groundShaders.vs = LoadShader({ LLGL::ShaderType::Vertex,   "HelloGame.VSGround.300es.vert" }, { vertexFormat });
-            groundShaders.ps = LoadShader({ LLGL::ShaderType::Fragment, "HelloGame.PSGround.300es.frag" });
-        }
-        else if (Supported(LLGL::ShadingLanguage::SPIRV))
-        {
-            sceneShaders.vs  = LoadShader({ LLGL::ShaderType::Vertex,   "HelloGame.VSInstance.450core.vert.spv" }, { vertexFormat });
-            sceneShaders.ps  = LoadShader({ LLGL::ShaderType::Fragment, "HelloGame.PSInstance.450core.frag.spv" });
-
-            groundShaders.vs = LoadShader({ LLGL::ShaderType::Vertex,   "HelloGame.VSGround.450core.vert.spv" }, { vertexFormat });
-            groundShaders.ps = LoadShader({ LLGL::ShaderType::Fragment, "HelloGame.PSGround.450core.frag.spv" });
-        }
-        else if (Supported(LLGL::ShadingLanguage::Metal))
-        {
-            sceneShaders.vs  = LoadShader({ LLGL::ShaderType::Vertex,   "HelloGame.hlsl", "VSInstance", "1.1" }, { vertexFormat });
-            sceneShaders.ps  = LoadShader({ LLGL::ShaderType::Fragment, "HelloGame.hlsl", "PSInstance", "1.1" });
-
-            groundShaders.vs = LoadShader({ LLGL::ShaderType::Vertex,   "HelloGame.hlsl", "VSGround",   "1.1" }, { vertexFormat });
-            groundShaders.ps = LoadShader({ LLGL::ShaderType::Fragment, "HelloGame.hlsl", "PSGround",   "1.1" });
-        }
-        else
-        {
-            LLGL_THROW_RUNTIME_ERROR("No shaders provided for this backend");
-        }
+        groundShaders.vs = LoadVertexShader  ("HelloGame", "VSGround");
+        groundShaders.ps = LoadFragmentShader("HelloGame", "PSGround");
     }
 
     void CreatePipelines()
     {
         const bool needsExplicitMultiSample = (GetSampleCount() > 1 && !IsDirect3D());
-        const bool needsUniqueBindingSlots  = (IsVulkan());
 
         // Create PSO for instanced meshes
         scenePSOLayout[0] = renderer->CreatePipelineLayout(
@@ -933,20 +1022,27 @@ private:
                 "cbuffer(Scene@1):vert:frag,"
                 "%s(instances@2):vert,"
                 "texture(shadowMap@4):frag,"
-                "sampler(shadowMapSampler@%d):frag,"
-                "float3(worldOffset),"  // Uniform_worldOffset   (0)
-                "float(bendIntensity)," // Uniform_bendIntensity (1)
-                "uint(firstInstance),", // Uniform_firstInstance (2)
-                (instanceBuffer.IsCbuffer() ? "cbuffer" : "buffer"),
-                (needsUniqueBindingSlots ? 5 : 4)
+                "sampler(shadowMapSampler@5):frag,"
+
+                "float3( globals.worldOffset   )," // Uniform_worldOffset   (0)
+                "float ( globals.bendIntensity )," // Uniform_bendIntensity (1)
+                "uint  ( globals.firstInstance )," // Uniform_firstInstance (2)
+
+                "sampler<shadowMap, shadowMapSampler>(s_shadowMapshadowMapSampler@4),"
+                ,
+                (instanceBuffer.IsCbuffer() ? "cbuffer" : "buffer")
             )
         );
+
+        // Specify vertex format
+        LLGL::DynamicVector<LLGL::VertexAttribute> vertexAttribs = LLGL::Parse("rgb32f(position),rgb32f(normal),rg32f(texCoord)");
 
         LLGL::GraphicsPipelineDescriptor scenePSODesc;
         {
             scenePSODesc.debugName                      = "InstancedMesh.PSO";
             scenePSODesc.pipelineLayout                 = scenePSOLayout[0];
             scenePSODesc.renderPass                     = swapChain->GetRenderPass();
+            scenePSODesc.inputVertexAttribs             = vertexAttribs;
             scenePSODesc.vertexShader                   = sceneShaders.vs;
             scenePSODesc.fragmentShader                 = sceneShaders.ps;
             scenePSODesc.depth.testEnabled              = true;
@@ -963,9 +1059,11 @@ private:
             LLGL::Parse(
                 "cbuffer(Scene@1):vert,"
                 "%s(instances@2):vert,"
-                "float3(worldOffset),"
-                "float(bendIntensity),"
-                "uint(firstInstance),",
+
+                "float3( globals.worldOffset   )," // Uniform_worldOffset   (0)
+                "float ( globals.bendIntensity )," // Uniform_bendIntensity (1)
+                "uint  ( globals.firstInstance )," // Uniform_firstInstance (2)
+                ,
                 (instanceBuffer.IsCbuffer() ? "cbuffer" : "buffer")
             )
         );
@@ -990,11 +1088,12 @@ private:
             LLGL::Parse(
                 "cbuffer(Scene@1):vert:frag,"
                 "texture(colorMap@2):frag,"
-                "sampler(colorMapSampler@%d):frag,"
+                "sampler(colorMapSampler@3):frag,"
                 "texture(shadowMap@4):frag,"
-                "sampler(shadowMapSampler@%d):frag,",
-                (needsUniqueBindingSlots ? 3 : 2),
-                (needsUniqueBindingSlots ? 5 : 4)
+                "sampler(shadowMapSampler@5):frag,"
+
+                "sampler<colorMap, colorMapSampler>(s_colorMapcolorMapSampler@2),"
+                "sampler<shadowMap, shadowMapSampler>(s_shadowMapshadowMapSampler@4),"
             )
         );
 
@@ -1002,6 +1101,7 @@ private:
         {
             groundPSODesc.debugName                     = "Ground.PSO";
             groundPSODesc.pipelineLayout                = groundPSOLayout;
+            groundPSODesc.inputVertexAttribs            = vertexAttribs;
             groundPSODesc.vertexShader                  = groundShaders.vs;
             groundPSODesc.fragmentShader                = groundShaders.ps;
             groundPSODesc.renderPass                    = swapChain->GetRenderPass();
@@ -1014,15 +1114,17 @@ private:
         ReportPSOErrors(groundPSO);
     }
 
-    static Gs::Vector3f GridPosToWorldPos(const int (&gridPos)[2], float posY)
+    Gs::Vector3f GridPosToWorldPos(const int (&gridPos)[2], float posY)
     {
         const float posX = static_cast<float>(gridPos[0])*2.0f;
         const float posZ = static_cast<float>(gridPos[1])*2.0f;
-        return Gs::Vector3f{ posX, posY, posZ };
+        return Gs::Vector3f{ posX, posY, posZ * GetProjectionZAxis() };
     }
 
     void SetPlayerTransform(InstanceMatrixType& outMatrix, const int (&gridPos)[2], int moveX, int moveZ, float posY, float transition)
     {
+        const float projZAxis = GetProjectionZAxis();
+
         outMatrix.LoadIdentity();
 
         // Position player onto current grid
@@ -1056,12 +1158,12 @@ private:
             else if (moveZ < 0)
             {
                 // Move forwards
-                Gs::RotateFree(outMatrix, Gs::Vector3f{ 1,0,0 }, +angle, Gs::Vector3f{  0,-1,-1 });
+                Gs::RotateFree(outMatrix, Gs::Vector3f{ 1,0,0 }, +angle*projZAxis, Gs::Vector3f{  0,-1,-1*projZAxis });
             }
             else if (moveZ > 0)
             {
                 // Move backwards
-                Gs::RotateFree(outMatrix, Gs::Vector3f{ 1,0,0 }, -angle, Gs::Vector3f{  0,-1,+1 });
+                Gs::RotateFree(outMatrix, Gs::Vector3f{ 1,0,0 }, -angle*projZAxis, Gs::Vector3f{  0,-1,+1*projZAxis });
             }
         }
     }
@@ -1365,7 +1467,7 @@ private:
             nextLevel = &levels[index];
             nextLevel->ResetTiles();
             levelDistance           = static_cast<float>(currentLevel->gridSize[0] + nextLevel->gridSize[0]) * 1.5f * moveDirection;
-            nextLevelInstanceOffset = static_cast<std::uint32_t>(currentLevel->meshInstances.size());
+            nextLevelInstanceOffset = (currentLevel == nextLevel ? 0 : static_cast<std::uint32_t>(currentLevel->meshInstances.size()));
 
             // Update instance buffer from current and next level instance data plus one instance for the player model
             instanceBuffer.Resize(*renderer, 1 + static_cast<std::uint32_t>(currentLevel->meshInstances.size() + nextLevel->meshInstances.size()));
@@ -1404,11 +1506,23 @@ private:
 
     void SetShadowMapView()
     {
+        const float projZAxis = GetProjectionZAxis();
+
         // Generate shadow map projection for light direction
-        Gs::Vector3f lightDir = scene.lightDir;
-        Gs::Vector3f upVector = (lightDir.y < 0.999f ? Gs::Vector3f{ 0, 1, 0 } : Gs::Vector3f{ 0, 0, -1 });
-        Gs::Vector3f tangentU = Gs::Cross(upVector, lightDir).Normalized();
-        Gs::Vector3f tangentV = Gs::Cross(lightDir, tangentU);
+        const Gs::Vector3f lightDir = scene.lightDir;
+        const Gs::Vector3f upVector = (lightDir.y < 0.999f ? Gs::Vector3f{ 0, 1, 0 } : Gs::Vector3f{ 0, 0, -1 * projZAxis });
+
+        Gs::Vector3f tangentU, tangentV;
+        if (HasRightHandedProjection())
+        {
+            tangentU = Gs::Cross(lightDir, upVector).Normalized();
+            tangentV = Gs::Cross(tangentU, lightDir);
+        }
+        else
+        {
+            tangentU = Gs::Cross(upVector, lightDir).Normalized();
+            tangentV = Gs::Cross(lightDir, tangentU);
+        }
 
         Gs::Matrix4f lightOrientation;
 
@@ -1420,17 +1534,17 @@ private:
         lightOrientation(1, 1) = tangentV.y;
         lightOrientation(1, 2) = tangentV.z;
 
-        lightOrientation(2, 0) = lightDir.x;
-        lightOrientation(2, 1) = lightDir.y;
-        lightOrientation(2, 2) = lightDir.z;
+        lightOrientation(2, 0) = lightDir.x * projZAxis;
+        lightOrientation(2, 1) = lightDir.y * projZAxis;
+        lightOrientation(2, 2) = lightDir.z * projZAxis;
 
         lightOrientation.MakeInverse();
 
         // Update view transformation from light perspective
         scene.vpMatrix.LoadIdentity();
-        Gs::Translate(scene.vpMatrix, { camera.levelCenterPos.x, 0.0f, camera.levelCenterPos.y });
+        Gs::Translate(scene.vpMatrix, { camera.levelCenterPos.x, 0.0f, camera.levelCenterPos.y * projZAxis });
         scene.vpMatrix *= lightOrientation;
-        Gs::Translate(scene.vpMatrix, { 0, 0, -50.0f });
+        Gs::Translate(scene.vpMatrix, { 0, 0, -50.0f * projZAxis });
 
         const float shadowMapScale = camera.viewDistance*1.5f;
         Gs::Matrix4f lightProjection = OrthogonalProjection(shadowMapScale, shadowMapScale, 0.1f, 100.0f);
@@ -1444,11 +1558,13 @@ private:
 
     void SetCameraView()
     {
+        const float projZAxis = GetProjectionZAxis();
+
         // Update view transformation from camera perspective
         scene.vpMatrix.LoadIdentity();
-        Gs::Translate(scene.vpMatrix, { camera.levelCenterPos.x, 0, camera.levelCenterPos.y });
-        Gs::RotateFree(scene.vpMatrix, { 1, 0, 0 }, Gs::Deg2Rad(-65.0f));
-        Gs::Translate(scene.vpMatrix, { 0, 0, -camera.viewDistance });
+        Gs::Translate(scene.vpMatrix, { camera.levelCenterPos.x, 0, camera.levelCenterPos.y * projZAxis });
+        Gs::RotateFree(scene.vpMatrix, { 1, 0, 0 }, Gs::Deg2Rad(-65.0f * projZAxis));
+        Gs::Translate(scene.vpMatrix, { 0, 0, -camera.viewDistance * projZAxis });
         scene.viewPos = Gs::TransformVector(scene.vpMatrix, Gs::Vector3f{ 0, 0, 0 });
         scene.vpMatrix.MakeInverse();
         scene.vpMatrix = projection * scene.vpMatrix;
@@ -1619,12 +1735,14 @@ private:
             SetLightPhase(effects.lightPhase + delta);
             effects.lightPhaseChanged = false;
         }
-            
+
         #endif // /ENABLE_CHEATS
     }
 
     void UpdateScene(float dt)
     {
+        const float projZAxis = GetProjectionZAxis();
+
         // Update user input, but not while transitioning
         if (nextLevel == nullptr)
             PollUserInput();
@@ -1694,6 +1812,9 @@ private:
                     if (player.gridPos[0] != nextPosX ||
                         player.gridPos[1] != nextPosY)
                     {
+                        // Lock previously activated tile
+                        currentLevel->LockLastActivatedTile();
+
                         // Activate tile and start warp effect when level has been completed
                         if (currentLevel->IsTileHole(nextPosX, nextPosY))
                         {
@@ -1874,8 +1995,8 @@ private:
                 }
 
                 // Update player rotation with jitter effect
-                Gs::RotateFree(wMatrixPlayer, Gs::Vector3f{ 1, 0, 0 }, effects.jitterRotation[0]);
-                Gs::RotateFree(wMatrixPlayer, Gs::Vector3f{ 0, 1, 0 }, effects.jitterRotation[1]);
+                Gs::RotateFree(wMatrixPlayer, Gs::Vector3f{ 1, 0, 0 }, effects.jitterRotation[0] * projZAxis);
+                Gs::RotateFree(wMatrixPlayer, Gs::Vector3f{ 0, 1, 0 }, effects.jitterRotation[1] * projZAxis);
                 Gs::RotateFree(wMatrixPlayer, Gs::Vector3f{ 0, 0, 1 }, effects.jitterRotation[2]);
 
                 const float playerScale = 1.0f + explodePhase * playerExplodeScale;
@@ -1943,6 +2064,9 @@ private:
             }
             SetLightPhase(effects.lightPhase);
         }
+
+        // Animate current level
+        currentLevel->Animate(dt);
     }
 
     void RenderLevel(const Level& level, float worldOffsetX, std::uint32_t instanceOffset)
@@ -2043,11 +2167,10 @@ private:
         }
     }
 
-    void OnDrawFrame() override
+    void OnDrawFrame(float dt) override
     {
         // Update scene by user input
-        timer.MeasureTime();
-        UpdateScene(static_cast<float>(timer.GetDeltaTime()));
+        UpdateScene(dt);
 
         commands->Begin();
         {
@@ -2063,7 +2186,7 @@ private:
                 if (numInstancesToUpdate > 0)
                 {
                     // Update mesh instance buffer
-                    const std::uint32_t firstInstanceToUpdate = (1 + nextLevelInstanceOffset + currentLevel->meshInstanceDirtyRange.begin);
+                    const std::uint32_t firstInstanceToUpdate = (1 + currentLevelInstanceOffset + currentLevel->meshInstanceDirtyRange.begin);
 
                     instanceBuffer.Update(
                         *commands,
@@ -2131,6 +2254,8 @@ constexpr float  Example_HelloGame::timeOfDayChangeSpeed   ;
 constexpr float  Example_HelloGame::jitterDelay            ;
 constexpr float  Example_HelloGame::jitterDuration         ;
 constexpr float  Example_HelloGame::jitterMaxAngle         ;
+constexpr float  Example_HelloGame::tileActivateSpeed      ;
+constexpr float  Example_HelloGame::tileActivateWallHeight ;
 
 constexpr float  Example_HelloGame::playerMoveSpeed        ;
 constexpr float  Example_HelloGame::playerFallAcceleration ;

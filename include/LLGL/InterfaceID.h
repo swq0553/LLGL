@@ -33,9 +33,13 @@ struct InterfaceID
         Canvas_EventListener,   //!< Extends Interface. \see Canvas::EventListener
         Window,                 //!< Extends Interface. \see Window
         Window_EventListener,   //!< Extends Interface. \see Window::EventListener
+        IncludeHandler,         //!< Extends Interface. \see IncludeHandler
         Input,                  //!< Extends Interface. \see Input
         RenderSystem,           //!< Extends Interface. \see RenderSystem
         RenderSystemChild,      //!< Extends Interface. \see RenderSystemChild
+        XRSystem,               //!< Extends Interface. \see XRSystem
+        XRSession,              //!< Extends Interface. \see XRSession
+        XRSwapChain,            //!< Extends Interface. \see XRSwapChain
         BufferArray,            //!< Extends RenderSystemChild. \see BufferArray
         CommandBuffer,          //!< Extends RenderSystemChild. \see CommandBuffer
         CommandBufferTier1,     //!< Extends CommandBuffer. \see CommandBufferTier1

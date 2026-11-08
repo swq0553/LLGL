@@ -267,20 +267,28 @@ class LLGL_EXPORT RenderSystem : public Interface
         /**
         \brief Creates a new buffer array.
 
-        \param[in] numBuffers Specifies the number of buffers in the array. This must be greater than 0.
-        \param[in] bufferArray Pointer to an array of Buffer object pointers. This must not be null.
+        \param[in] bufferViews Array of vertex buffer buffer views with optional strides and offsets.
 
         \remarks All buffers within this array must have the same binding flags.
         The buffers inside this array must persist as long as this buffer array is used,
         and the individual buffers are still required to read and write its data from and to the GPU.
-
-        \throws std::invalid_argument If \c numBuffers is 0.
-        \throws std::invalid_argument If \c bufferArray is null.
-        \throws std::invalid_argument If any of the pointers in the array are null.
-        \throws std::invalid_argument If not all buffers have the same binding flags.
         \see BufferDescriptor::bindFlags
+        \see RenderingLimits::maxVertexBufferInputs
         */
-        virtual BufferArray* CreateBufferArray(std::uint32_t numBuffers, Buffer* const * bufferArray) = 0;
+        virtual BufferArray* CreateBufferArray(ArrayView<VertexBufferView> bufferViews) = 0;
+
+        #ifndef DOXYGEN_SHOULD_SKIP_THIS
+        //! \deprecated Since 0.05b; Use primary CreateBufferArray(ArrayView<VertexBufferView>) function instead!
+        LLGL_DEPRECATED("`This version of the `CreateBufferArray()` function is deprecated since 0.05b; Use `CreateBufferArray(ArrayView<VertexBufferView>)` function instead")
+        inline BufferArray* CreateBufferArray(std::uint32_t numBuffers, Buffer* const * bufferArray)
+        {
+            SmallVector<VertexBufferView> bufferViews;
+            bufferViews.resize(numBuffers);
+            for (std::uint32_t i = 0; i < numBuffers; ++i)
+                bufferViews[i] = VertexBufferView{ bufferArray[i] };
+            return CreateBufferArray(bufferViews);
+        }
+        #endif
 
         //! Releases the specified buffer object. After this call, the specified object must no longer be used.
         virtual void Release(Buffer& buffer) = 0;
@@ -301,7 +309,7 @@ class LLGL_EXPORT RenderSystem : public Interface
         \remarks This function, just like any other write operation from the RenderSystem, <b>should not</b> be interleaved with command buffer recording
         in which these resources are used, unless they are carefully organized to not override their content during such command recordings.
         This is because even an immediate context does not guarantee that any command is submitted to the GPU until the end of recording (i.e. CommandBuffer::End).
-        To update a small buffer (maximum of 65536 bytes) during command recording, use CommandBuffer::UpdateBuffer.
+        To update buffers during command recording, use CommandBuffer::UpdateBuffer.
 
         \see ReadBuffer
         */
@@ -458,7 +466,7 @@ class LLGL_EXPORT RenderSystem : public Interface
         \see WriteResourceHeap
         \see ResourceHeapDescriptor::numResourceViews
         */
-        virtual ResourceHeap* CreateResourceHeap(const ResourceHeapDescriptor& resourceHeapDesc, const ArrayView<ResourceViewDescriptor>& initialResourceViews = {}) = 0;
+        virtual ResourceHeap* CreateResourceHeap(const ResourceHeapDescriptor& resourceHeapDesc, ArrayView<ResourceViewDescriptor> initialResourceViews = {}) = 0;
 
         //! Releases the specified ResourceHeap object. After this call, the specified object must no longer be used.
         virtual void Release(ResourceHeap& resourceHeap) = 0;
@@ -482,9 +490,9 @@ class LLGL_EXPORT RenderSystem : public Interface
 
         \see ResourceHeap::GetNumDescriptorSets
         \see PipelineLayout::GetNumHeapBindings
-        \see CommandBUffer::SetResourceHeap
+        \see CommandBuffer::SetResourceHeap
         */
-        virtual std::uint32_t WriteResourceHeap(ResourceHeap& resourceHeap, std::uint32_t firstDescriptor, const ArrayView<ResourceViewDescriptor>& resourceViews) = 0;
+        virtual std::uint32_t WriteResourceHeap(ResourceHeap& resourceHeap, std::uint32_t firstDescriptor, ArrayView<ResourceViewDescriptor> resourceViews) = 0;
 
         /* ----- Render Passes ----- */
 
@@ -561,7 +569,7 @@ class LLGL_EXPORT RenderSystem : public Interface
         /**
         \brief Releases the specified PipelineCache object. After this call, the specified object must no longer be used.
         \remarks Backends that do not support pipeline caching might be using only a single pipeline cache object with a reference counter,
-        in which case releaseing such object will only decrement its internal counter and only delete the object until this counter reaches zero.
+        in which case releasing such object will only decrement its internal counter and only delete the object until this counter reaches zero.
         */
         virtual void Release(PipelineCache& pipelineCache)  = 0;
 
@@ -625,8 +633,9 @@ class LLGL_EXPORT RenderSystem : public Interface
 
         /**
         \brief Creates a new fence (used for CPU/GPU synchronization).
-        \see CommandBuffer::SubmitFence
-        \see CommandBuffer::WaitFence
+        \note There is currently not much use for fences in the LLGL interface. This will become more important once async compute is supported.
+        \see CommandQueue::Submit(Fence&)
+        \see CommandQueue::WaitFence
         */
         virtual Fence* CreateFence() = 0;
 
@@ -639,9 +648,8 @@ class LLGL_EXPORT RenderSystem : public Interface
         \brief Returns the native device handle.
 
         \param[out] nativeHandle Raw pointer to the backend specific structure to store the native handle.
-        Optain the respective structure from <code>#include <LLGL/Backend/BACKEND/NativeHandle.h></code>
+        Obtain the respective structure from <code>#include <LLGL/Backend/BACKEND/NativeHandle.h></code>
         where \c BACKEND must be either \c Direct3D12, \c Direct3D11, \c Vulkan, \c Metal, or \c OpenGL.
-        OpenGL does not have a native handle as it uses the current platform specific GL context.
 
         \param[in] nativeHandleSize Specifies the size (in bytes) of the native handle structure for robustness.
         This must be <code>sizeof(STRUCT)</code> where \c STRUCT is the respective backend specific structure such as \c LLGL::Direct3D12::RenderSystemNativeHandle.
@@ -702,9 +710,6 @@ class LLGL_EXPORT RenderSystem : public Interface
 
         //! Validates the specified buffer descriptor to be used for buffer creation.
         static void AssertCreateBuffer(const BufferDescriptor& bufferDesc, std::uint64_t maxSize);
-
-        //! Validates the specified arguments to be used for buffer array creation.
-        static void AssertCreateBufferArray(std::uint32_t numBuffers, Buffer* const * bufferArray);
 
         //! Validates the specified shader descriptor.
         static void AssertCreateShader(const ShaderDescriptor& shaderDesc);

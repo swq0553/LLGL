@@ -18,8 +18,11 @@
 #include "../../../Core/Assertion.h"
 #include <LLGL/PipelineStateFlags.h>
 #include <LLGL/Platform/Platform.h>
+#include <LLGL/VertexAttribute.h>
 #include <LLGL/Utils/ForRange.h>
+#include <Metal/Metal.h>
 #include <TargetConditionals.h>
+#include <set>
 #include <string.h>
 
 
@@ -77,7 +80,7 @@ MTGraphicsPSO::MTGraphicsPSO(
     /* Create render pipeline and depth-stencil states */
     if (CreateRenderPipelineState(device, desc, defaultRenderPass))
     {
-        CreateDepthStencilState(device, desc);
+        CreateDepthStencilState(device, desc, defaultRenderPass);
         BuildStaticStateBuffer(desc);
     }
 }
@@ -132,11 +135,13 @@ bool MTGraphicsPSO::GetStaticState(
 {
     if (staticStateBuffer_)
     {
-        ByteBufferConstIterator byteBufferIter{ staticStateBuffer_.get() };
-        ::memcpy(outViewports, byteBufferIter.Next<MTLViewport>(numStaticViewports_), numStaticViewports_ * sizeof(MTLViewport));
-        outViewportCount = numStaticViewports_;
-        ::memcpy(outScissorRects, byteBufferIter.Next<MTLScissorRect>(numStaticScissors_), numStaticScissors_ * sizeof(MTLScissorRect));
-        outScissorRectCount = numStaticScissors_;
+        ByteBufferConstIterator byteBufferIter = staticStateBuffer_.GetBufferIterator();
+
+        outViewportCount = static_cast<NSUInteger>(staticStateBuffer_.GetNumViewports());
+        ::memcpy(outViewports, byteBufferIter.Next<MTLViewport>(outViewportCount), outViewportCount * sizeof(MTLViewport));
+
+        outScissorRectCount = static_cast<NSUInteger>(staticStateBuffer_.GetNumScissors());
+        ::memcpy(outScissorRects, byteBufferIter.Next<MTLScissorRect>(outScissorRectCount), outScissorRectCount * sizeof(MTLScissorRect));
     }
     return false;
 }
@@ -208,6 +213,55 @@ static const MTShader* GetVertexOrPostTessVertexShader(const GraphicsPipelineDes
     return vertexShaderMT;
 }
 
+// Converts the vertex attribute to a Metal vertex buffer layout
+static void Convert(MTLVertexBufferLayoutDescriptor* dst, const VertexAttribute& src, bool isPatchControlPoint)
+{
+    if (src.instanceDivisor > 0)
+    {
+        dst.stepFunction = MTLVertexStepFunctionPerInstance;
+        dst.stepRate     = static_cast<NSUInteger>(src.instanceDivisor);
+    }
+    else
+    {
+        dst.stepFunction = (isPatchControlPoint ? MTLVertexStepFunctionPerPatchControlPoint : MTLVertexStepFunctionPerVertex);
+        dst.stepRate     = 1;
+    }
+    dst.stride = static_cast<NSUInteger>(src.stride);
+}
+
+// Converts the vertex attribute to a Metal vertex attribute
+static void Convert(MTLVertexAttributeDescriptor* dst, const VertexAttribute& src)
+{
+    dst.format      = MTTypes::ToMTLVertexFormat(src.format);
+    dst.offset      = static_cast<NSUInteger>(src.offset);
+    dst.bufferIndex = static_cast<NSUInteger>(src.slot);
+}
+
+void MTGraphicsPSO::BuildInputLayout(LLGL::ArrayView<VertexAttribute> vertexAttribs, bool isPatchControlPoint, MTLVertexDescriptor*& vertexDesc)
+{
+    if (vertexAttribs.empty())
+        return;
+
+    /* Allocate new vertex descriptor */
+    if (vertexDesc)
+        [vertexDesc release];
+    vertexDesc = [[MTLVertexDescriptor alloc] init];
+
+    /* Convert vertex attributes to Metal vertex buffer layouts and attribute descriptors */
+    std::set<std::uint32_t> slotOccupied;
+
+    for_range(i, vertexAttribs.size())
+    {
+        const auto& attr = vertexAttribs[i];
+
+        auto occupied = slotOccupied.insert(attr.slot);
+        if (occupied.second)
+            Convert(vertexDesc.layouts[attr.slot], attr, isPatchControlPoint);
+
+        Convert(vertexDesc.attributes[attr.location], attr);
+    }
+}
+
 bool MTGraphicsPSO::CreateRenderPipelineState(
     id<MTLDevice>                       device,
     const GraphicsPipelineDescriptor&   desc,
@@ -227,7 +281,7 @@ bool MTGraphicsPSO::CreateRenderPipelineState(
     else
     {
         /* Error: Every graphics PSO needs a valid vertex function */
-        GetMutableReport().Errorf("cannot create Metal graphics PSO without valid vertex function");
+        GetMutableReport().Errorf("cannot create Metal graphics PSO without valid vertex function\n");
         return false;
     }
 
@@ -243,11 +297,24 @@ bool MTGraphicsPSO::CreateRenderPipelineState(
     /* Create render pipeline state */
     MTLRenderPipelineDescriptor* psoDesc = [[MTLRenderPipelineDescriptor alloc] init];
     {
-        psoDesc.vertexDescriptor        = vertexShaderMT->GetMTLVertexDesc();
+        id<MTLFunction> vertexFunction = vertexShaderMT->GetNative();
+        MTLVertexDescriptor* vertexDesc = nullptr;
+        
+        /* If the patch type of the vertex function is not MTLPatchTypeNone, the vertex layout declares a patch control point */
+        bool isPatchControlPoint = (vertexFunction != nil && [vertexFunction patchType] != MTLPatchTypeNone);
+        BuildInputLayout(desc.inputVertexAttribs, isPatchControlPoint, vertexDesc);
+        
+        // Deprecated feature support: Get input layout from the vertex shader if we failed to get it from the pipeline descriptor.
+        if (vertexDesc == nullptr)
+        {
+            vertexDesc = vertexShaderMT->GetMTLVertexDesc();
+        }
+
+        psoDesc.vertexDescriptor        = vertexDesc;
         psoDesc.alphaToCoverageEnabled  = MTBoolean(desc.blend.alphaToCoverageEnabled);
         psoDesc.alphaToOneEnabled       = NO;
         psoDesc.fragmentFunction        = GetNativeMTShader(desc.fragmentShader);
-        psoDesc.vertexFunction          = vertexShaderMT->GetNative();
+        psoDesc.vertexFunction          = vertexFunction;
 
         if (@available(iOS 12.0, *))
             psoDesc.inputPrimitiveTopology = MTTypes::ToMTLPrimitiveTopologyClass(desc.primitiveTopology);
@@ -331,19 +398,28 @@ id<MTLRenderPipelineState> MTGraphicsPSO::CreateNativeRenderPipelineState(
 
 void MTGraphicsPSO::CreateDepthStencilState(
     id<MTLDevice>                       device,
-    const GraphicsPipelineDescriptor&   desc)
+    const GraphicsPipelineDescriptor&   desc,
+    const MTRenderPass*                 defaultRenderPass)
 {
+    /*
+    Metal does not allow depth or stencil tests without the respective attachment,
+    so disable them like the other backends do implicitly when there is nothing to test against.
+    */
+    const MTRenderPass* renderPassMT = (desc.renderPass != nullptr ? LLGL_CAST(const MTRenderPass*, desc.renderPass) : defaultRenderPass);
+    const bool hasDepthAttachment   = (renderPassMT == nullptr || renderPassMT->GetDepthAttachment().pixelFormat != MTLPixelFormatInvalid);
+    const bool hasStencilAttachment = (renderPassMT == nullptr || renderPassMT->GetStencilAttachment().pixelFormat != MTLPixelFormatInvalid);
+
     MTLDepthStencilDescriptor* depthStencilDesc = [[MTLDepthStencilDescriptor alloc] init];
     {
         /* Convert depth descriptor */
-        depthStencilDesc.depthWriteEnabled          = MTBoolean(desc.depth.writeEnabled);
-        if (desc.depth.testEnabled)
+        depthStencilDesc.depthWriteEnabled          = MTBoolean(desc.depth.writeEnabled && hasDepthAttachment);
+        if (desc.depth.testEnabled && hasDepthAttachment)
             depthStencilDesc.depthCompareFunction   = MTTypes::ToMTLCompareFunction(desc.depth.compareOp);
         else
             depthStencilDesc.depthCompareFunction   = MTLCompareFunctionAlways;
 
         /* Convert stencil descriptor */
-        if (desc.stencil.testEnabled)
+        if (desc.stencil.testEnabled && hasStencilAttachment)
         {
             Convert(depthStencilDesc.frontFaceStencil, desc.stencil.front);
             Convert(depthStencilDesc.backFaceStencil, desc.stencil.back);
@@ -365,77 +441,35 @@ void MTGraphicsPSO::CreateDepthStencilState(
 
 void MTGraphicsPSO::BuildStaticStateBuffer(const GraphicsPipelineDescriptor& desc)
 {
-    /* Allocate packed raw buffer */
-    const std::size_t bufferSize =
-    (
-        desc.viewports.size() * sizeof(MTLViewport) +
-        desc.scissors.size()  * sizeof(MTLScissorRect)
+    ByteBufferIterator byteBufferIter = staticStateBuffer_.Allocate(
+        desc.viewports.size(), desc.scissors.size(),
+        sizeof(MTLViewport), sizeof(MTLScissorRect),
+        GetMutableReport()
     );
-    staticStateBuffer_ = DynamicByteArray{ bufferSize, UninitializeTag{} };
-
-    ByteBufferIterator byteBufferIter{ staticStateBuffer_.get() };
-
-    /* Build static viewports in raw buffer */
-    if (!desc.viewports.empty())
-        BuildStaticViewports(desc.viewports.size(), desc.viewports.data(), byteBufferIter);
-
-    /* Build static scissors in raw buffer */
-    if (!desc.scissors.empty())
-        BuildStaticScissors(desc.scissors.size(), desc.scissors.data(), byteBufferIter);
-}
-
-void MTGraphicsPSO::BuildStaticViewports(std::size_t numViewports, const Viewport* viewports, ByteBufferIterator& byteBufferIter)
-{
-    /* Store number of viewports and validate limit */
-    numStaticViewports_ = static_cast<NSUInteger>(numViewports);
-
-    if (numStaticViewports_ > LLGL_MAX_NUM_VIEWPORTS_AND_SCISSORS)
-    {
-        GetMutableReport().Errorf(
-            "too many viewports in graphics pipeline state (%d specified, but limit is %u)",
-            numStaticViewports_, LLGL_MAX_NUM_VIEWPORTS_AND_SCISSORS
-        );
-        numStaticViewports_ = LLGL_MAX_NUM_VIEWPORTS_AND_SCISSORS;
-    }
 
     /* Build <MTLViewport> entries */
-    for_range(i, numViewports)
+    for_range(i, staticStateBuffer_.GetNumViewports())
     {
         auto dst = byteBufferIter.Next<MTLViewport>();
         {
-            dst->originX    = viewports[i].x;
-            dst->originY    = viewports[i].y;
-            dst->width      = viewports[i].width;
-            dst->height     = viewports[i].height;
-            dst->znear      = viewports[i].minDepth;
-            dst->zfar       = viewports[i].maxDepth;
+            dst->originX    = desc.viewports[i].x;
+            dst->originY    = desc.viewports[i].y;
+            dst->width      = desc.viewports[i].width;
+            dst->height     = desc.viewports[i].height;
+            dst->znear      = desc.viewports[i].minDepth;
+            dst->zfar       = desc.viewports[i].maxDepth;
         }
-    }
-}
-
-void MTGraphicsPSO::BuildStaticScissors(std::size_t numScissors, const Scissor* scissors, ByteBufferIterator& byteBufferIter)
-{
-    /* Store number of scissors and validate limit */
-    numStaticScissors_ = static_cast<NSUInteger>(numScissors);
-
-    if (numStaticScissors_ > LLGL_MAX_NUM_VIEWPORTS_AND_SCISSORS)
-    {
-        GetMutableReport().Errorf(
-            "too many scissors in graphics pipeline state (%d specified, but limit is %u)",
-            numStaticScissors_, LLGL_MAX_NUM_VIEWPORTS_AND_SCISSORS
-        );
-        numStaticScissors_ = LLGL_MAX_NUM_VIEWPORTS_AND_SCISSORS;
     }
 
     /* Build <MTLScissorRect> entries */
-    for_range(i, numScissors)
+    for_range(i, staticStateBuffer_.GetNumScissors())
     {
         auto dst = byteBufferIter.Next<MTLScissorRect>();
         {
-            dst->x      = static_cast<NSUInteger>(scissors[i].x);
-            dst->y      = static_cast<NSUInteger>(scissors[i].y);
-            dst->width  = static_cast<NSUInteger>(scissors[i].width);
-            dst->height = static_cast<NSUInteger>(scissors[i].height);
+            dst->x      = static_cast<NSUInteger>(desc.scissors[i].x);
+            dst->y      = static_cast<NSUInteger>(desc.scissors[i].y);
+            dst->width  = static_cast<NSUInteger>(desc.scissors[i].width);
+            dst->height = static_cast<NSUInteger>(desc.scissors[i].height);
         }
     }
 }

@@ -33,12 +33,20 @@ DECL_VKPROC( vkCreateAndroidSurfaceKHR );
 
 #endif
 
-/* VK_EXT_conditional_rendering */
+#if VK_EXT_headless_surface
+
+DECL_VKPROC( vkCreateHeadlessSurfaceEXT );
+
+#endif // /VK_EXT_headless_surface
+
+#if VK_EXT_conditional_rendering
 
 DECL_VKPROC( vkCmdBeginConditionalRenderingEXT );
 DECL_VKPROC( vkCmdEndConditionalRenderingEXT   );
 
-/* VK_EXT_conditional_rendering */
+#endif // /VK_EXT_conditional_rendering
+
+#if VK_EXT_transform_feedback
 
 DECL_VKPROC( vkCmdBindTransformFeedbackBuffersEXT );
 DECL_VKPROC( vkCmdBeginTransformFeedbackEXT       );
@@ -47,7 +55,9 @@ DECL_VKPROC( vkCmdBeginQueryIndexedEXT            );
 DECL_VKPROC( vkCmdEndQueryIndexedEXT              );
 DECL_VKPROC( vkCmdDrawIndirectByteCountEXT        );
 
-/* VK_EXT_debug_marker */
+#endif // /VK_EXT_transform_feedback
+
+#if VK_EXT_debug_marker
 
 DECL_VKPROC( vkDebugMarkerSetObjectTagEXT  );
 DECL_VKPROC( vkDebugMarkerSetObjectNameEXT );
@@ -55,7 +65,9 @@ DECL_VKPROC( vkCmdDebugMarkerBeginEXT      );
 DECL_VKPROC( vkCmdDebugMarkerEndEXT        );
 DECL_VKPROC( vkCmdDebugMarkerInsertEXT     );
 
-/* VK_EXT_debug_utils */
+#endif // /VK_EXT_debug_marker
+
+#if VK_EXT_debug_utils
 
 DECL_VKPROC( vkCmdBeginDebugUtilsLabelEXT    );
 DECL_VKPROC( vkCmdEndDebugUtilsLabelEXT      );
@@ -69,7 +81,9 @@ DECL_VKPROC( vkSetDebugUtilsObjectNameEXT    );
 DECL_VKPROC( vkSetDebugUtilsObjectTagEXT     );
 DECL_VKPROC( vkSubmitDebugUtilsMessageEXT    );
 
-/* VK_KHR_get_physical_device_properties2 */
+#endif // /VK_EXT_debug_utils
+
+#if VK_KHR_get_physical_device_properties2
 
 DECL_VKPROC( vkGetPhysicalDeviceFeatures2KHR                    );
 DECL_VKPROC( vkGetPhysicalDeviceProperties2KHR                  );
@@ -78,6 +92,29 @@ DECL_VKPROC( vkGetPhysicalDeviceImageFormatProperties2KHR       );
 DECL_VKPROC( vkGetPhysicalDeviceQueueFamilyProperties2KHR       );
 DECL_VKPROC( vkGetPhysicalDeviceMemoryProperties2KHR            );
 DECL_VKPROC( vkGetPhysicalDeviceSparseImageFormatProperties2KHR );
+
+#endif // /VK_KHR_get_physical_device_properties2
+
+#if VK_KHR_fragment_shading_rate
+
+DECL_VKPROC( vkCmdSetFragmentShadingRateKHR             );
+DECL_VKPROC( vkGetPhysicalDeviceFragmentShadingRatesKHR );
+
+#endif // /VK_KHR_fragment_shading_rate
+
+#if VK_EXT_mesh_shader
+
+DECL_VKPROC( vkCmdDrawMeshTasksEXT );
+DECL_VKPROC( vkCmdDrawMeshTasksIndirectEXT );
+DECL_VKPROC( vkCmdDrawMeshTasksIndirectCountEXT ); // Requires VK_KHR_draw_indirect_count or VK_AMD_draw_indirect_count
+
+#endif // /VK_EXT_mesh_shader
+
+#if VK_KHR_create_renderpass2
+
+DECL_VKPROC( vkCreateRenderPass2KHR );
+
+#endif // /VK_KHR_create_renderpass2
 
 
 

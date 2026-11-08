@@ -103,6 +103,8 @@ i.e. for the Format::RGB10A2UNorm the bit pattern is <code>A[31:30], B[29:20], G
 | Format::RG11B10Float    | <b>\c  32</b> | \c f11 | \c f11 | \c f10 |        |        |
 | Format::RGB9E5Float     | <b>\c  32</b> | \c   9 | \c   9 | \c   9 |        | \c   5 |
 | Format::BGR5A1UNorm     | <b>\c  16</b> | \c  n5 | \c  n5 | \c  n5 | \c  n1 |        |
+| Format::B5G6R5UNorm     | <b>\c  16</b> | \c  n5 | \c  n6 | \c  n5 |        |        |
+| Format::BGRA4UNorm      | <b>\c  16</b> | \c  n4 | \c  n4 | \c  n4 | \c  n4 |        |
 
 \see TextureDescriptor::format
 \see VertexAttribute::format
@@ -126,14 +128,14 @@ enum class Format
     R8UInt,             //!< Ordinary color format: red 8-bit unsigned integer component.
     R8SInt,             //!< Ordinary color format: red 8-bit signed integer component.
 
-    R16UNorm,           //!< Ordinary color format: red 16-bit normalized unsigned interger component.
-    R16SNorm,           //!< Ordinary color format: red 16-bit normalized signed interger component.
-    R16UInt,            //!< Ordinary color format: red 16-bit unsigned interger component.
-    R16SInt,            //!< Ordinary color format: red 16-bit signed interger component.
+    R16UNorm,           //!< Ordinary color format: red 16-bit normalized unsigned integer component.
+    R16SNorm,           //!< Ordinary color format: red 16-bit normalized signed integer component.
+    R16UInt,            //!< Ordinary color format: red 16-bit unsigned integer component.
+    R16SInt,            //!< Ordinary color format: red 16-bit signed integer component.
     R16Float,           //!< Ordinary color format: red 16-bit floating point component.
 
-    R32UInt,            //!< Ordinary color format: red 32-bit unsigned interger component.
-    R32SInt,            //!< Ordinary color format: red 32-bit signed interger component.
+    R32UInt,            //!< Ordinary color format: red 32-bit unsigned integer component.
+    R32SInt,            //!< Ordinary color format: red 32-bit signed integer component.
     R32Float,           //!< Ordinary color format: red 32-bit floating point component.
 
     R64Float,           //!< Ordinary color format: red 64-bit floating point component. \note Only supported with: Vulkan.
@@ -144,14 +146,14 @@ enum class Format
     RG8UInt,            //!< Ordinary color format: red, green 8-bit unsigned integer components.
     RG8SInt,            //!< Ordinary color format: red, green 8-bit signed integer components.
 
-    RG16UNorm,          //!< Ordinary color format: red, green 16-bit normalized unsigned interger components.
-    RG16SNorm,          //!< Ordinary color format: red, green 16-bit normalized signed interger components.
-    RG16UInt,           //!< Ordinary color format: red, green 16-bit unsigned interger components.
-    RG16SInt,           //!< Ordinary color format: red, green 16-bit signed interger components.
+    RG16UNorm,          //!< Ordinary color format: red, green 16-bit normalized unsigned integer components.
+    RG16SNorm,          //!< Ordinary color format: red, green 16-bit normalized signed integer components.
+    RG16UInt,           //!< Ordinary color format: red, green 16-bit unsigned integer components.
+    RG16SInt,           //!< Ordinary color format: red, green 16-bit signed integer components.
     RG16Float,          //!< Ordinary color format: red, green 16-bit floating point components.
 
-    RG32UInt,           //!< Ordinary color format: red, green 32-bit unsigned interger components.
-    RG32SInt,           //!< Ordinary color format: red, green 32-bit signed interger components.
+    RG32UInt,           //!< Ordinary color format: red, green 32-bit unsigned integer components.
+    RG32SInt,           //!< Ordinary color format: red, green 32-bit signed integer components.
     RG32Float,          //!< Ordinary color format: red, green 32-bit floating point components.
 
     RG64Float,          //!< Ordinary color format: red, green 64-bit floating point components. \note Only supported with: Vulkan.
@@ -163,14 +165,14 @@ enum class Format
     RGB8UInt,           //!< Ordinary color format: red, green, blue 8-bit unsigned integer components. \note Only supported with: OpenGL, Vulkan.
     RGB8SInt,           //!< Ordinary color format: red, green, blue 8-bit signed integer components. \note Only supported with: OpenGL, Vulkan.
 
-    RGB16UNorm,         //!< Ordinary color format: red, green, blue 16-bit normalized unsigned interger components. \note Only supported with: OpenGL, Vulkan.
-    RGB16SNorm,         //!< Ordinary color format: red, green, blue 16-bit normalized signed interger components. \note Only supported with: OpenGL, Vulkan.
-    RGB16UInt,          //!< Ordinary color format: red, green, blue 16-bit unsigned interger components. \note Only supported with: OpenGL, Vulkan.
-    RGB16SInt,          //!< Ordinary color format: red, green, blue 16-bit signed interger components. \note Only supported with: OpenGL, Vulkan.
+    RGB16UNorm,         //!< Ordinary color format: red, green, blue 16-bit normalized unsigned integer components. \note Only supported with: OpenGL, Vulkan.
+    RGB16SNorm,         //!< Ordinary color format: red, green, blue 16-bit normalized signed integer components. \note Only supported with: OpenGL, Vulkan.
+    RGB16UInt,          //!< Ordinary color format: red, green, blue 16-bit unsigned integer components. \note Only supported with: OpenGL, Vulkan.
+    RGB16SInt,          //!< Ordinary color format: red, green, blue 16-bit signed integer components. \note Only supported with: OpenGL, Vulkan.
     RGB16Float,         //!< Ordinary color format: red, green, blue 16-bit floating point components. \note Only supported with: OpenGL, Vulkan.
 
-    RGB32UInt,          //!< Ordinary color format: red, green, blue 32-bit unsigned interger components. \note As texture format only supported with: OpenGL, Vulkan, Direct3D 11, Direct3D 12.
-    RGB32SInt,          //!< Ordinary color format: red, green, blue 32-bit signed interger components. \note As texture format only supported with: OpenGL, Vulkan, Direct3D 11, Direct3D 12.
+    RGB32UInt,          //!< Ordinary color format: red, green, blue 32-bit unsigned integer components. \note As texture format only supported with: OpenGL, Vulkan, Direct3D 11, Direct3D 12.
+    RGB32SInt,          //!< Ordinary color format: red, green, blue 32-bit signed integer components. \note As texture format only supported with: OpenGL, Vulkan, Direct3D 11, Direct3D 12.
     RGB32Float,         //!< Ordinary color format: red, green, blue 32-bit floating point components. \note As texture format only supported with: OpenGL, Vulkan, Direct3D 11, Direct3D 12.
 
     RGB64Float,         //!< Ordinary color format: red, green, blue 64-bit floating point components. \note Only supported with: Vulkan.
@@ -182,14 +184,14 @@ enum class Format
     RGBA8UInt,          //!< Ordinary color format: red, green, blue, alpha 8-bit unsigned integer components.
     RGBA8SInt,          //!< Ordinary color format: red, green, blue, alpha 8-bit signed integer components.
 
-    RGBA16UNorm,        //!< Ordinary color format: red, green, blue, alpha 16-bit normalized unsigned interger components.
-    RGBA16SNorm,        //!< Ordinary color format: red, green, blue, alpha 16-bit normalized signed interger components.
-    RGBA16UInt,         //!< Ordinary color format: red, green, blue, alpha 16-bit unsigned interger components.
-    RGBA16SInt,         //!< Ordinary color format: red, green, blue, alpha 16-bit signed interger components.
+    RGBA16UNorm,        //!< Ordinary color format: red, green, blue, alpha 16-bit normalized unsigned integer components.
+    RGBA16SNorm,        //!< Ordinary color format: red, green, blue, alpha 16-bit normalized signed integer components.
+    RGBA16UInt,         //!< Ordinary color format: red, green, blue, alpha 16-bit unsigned integer components.
+    RGBA16SInt,         //!< Ordinary color format: red, green, blue, alpha 16-bit signed integer components.
     RGBA16Float,        //!< Ordinary color format: red, green, blue, alpha 16-bit floating point components.
 
-    RGBA32UInt,         //!< Ordinary color format: red, green, blue, alpha 32-bit unsigned interger components.
-    RGBA32SInt,         //!< Ordinary color format: red, green, blue, alpha 32-bit signed interger components.
+    RGBA32UInt,         //!< Ordinary color format: red, green, blue, alpha 32-bit unsigned integer components.
+    RGBA32SInt,         //!< Ordinary color format: red, green, blue, alpha 32-bit signed integer components.
     RGBA32Float,        //!< Ordinary color format: red, green, blue, alpha 32-bit floating point components.
 
     RGBA64Float,        //!< Ordinary color format: red, green, blue, alpha 64-bit floating point components. \note Only supported with: Vulkan.
@@ -207,6 +209,8 @@ enum class Format
     RG11B10Float,       //!< Packed color format: red, green 11-bit and blue 10-bit unsigned floating point, i.e. 6-bit mantissa for red and green, 5-bit mantissa for blue, and 5-bit exponent for all components.
     RGB9E5Float,        //!< Packed color format: red, green, blue 9-bit unsigned floating-point with shared 5-bit exponent, i.e. 9-bit mantissa for each component and one 5-bit exponent for all components.
     BGR5A1UNorm,        //!< Packed color format: blue, green, red 5-bit and alpha 1-bit normalized unsigned integer components. \note Only supported with: OpenGL, Vulkan, Direct3D 11.1, Direct3D 12, Metal.
+    B5G6R5UNorm,        //!< Packed color format: blue, green, red 5-6-5 normalized unsigned integer components. \note Only supported with: OpenGL, Vulkan, Direct3D 11.1, Direct3D 12, Metal.
+    BGRA4UNorm,         //!< Packed color format: blue, green, red, alpha 4-bit normalized unsigned integer components. \note Only supported with: OpenGL, Vulkan, Direct3D 11.1, Direct3D 12.
 
     /* --- Depth-stencil formats --- */
     D16UNorm,           //!< Depth-stencil format: depth 16-bit normalized unsigned integer component.
@@ -226,6 +230,10 @@ enum class Format
     BC4SNorm,           //!< Compressed color format: S3TC BC4 compressed red channel with normalized signed integer component 64-bit per 4x4 block.
     BC5UNorm,           //!< Compressed color format: S3TC BC5 compressed red and green channels with normalized unsigned integer components in 64-bit per 4x4 block.
     BC5SNorm,           //!< Compressed color format: S3TC BC5 compressed red and green channels with normalized signed integer components in 128-bit per 4x4 block.
+    BC6HUFloat,         //!< Compressed color format: BPTC BC6H compressed RGB for high-dynamic range (HDR) with unsigned 16-bit floating-point components in 128-bit per 4x4 block.
+    BC6HSFloat,         //!< Compressed color format: BPTC BC6H compressed RGB for high-dynamic range (HDR) with signed 16-bit floating-point components in 128-bit per 4x4 block.
+    BC7UNorm,           //!< Compressed color format: BPTC BC7 compressed RGBA with normalized unsigned integer components in 128-bit per 4x4 block.
+    BC7UNorm_sRGB,      //!< Compressed color format: BPTC BC7 compressed RGBA with normalized unsigned integer components in 128-bit per 4x4 block in non-linear sRGB color space.
 
     /* --- Advanced scalable texture compression (ASTC) formats --- */
     ASTC4x4,            //!< Compressed color format: ASTC compressed RGBA format in 128-bit per 4x4 block (8.00 bit rate). \note Only supported with: OpenGL, Vulkan, Metal.
@@ -558,8 +566,8 @@ LLGL_EXPORT bool IsColorFormat(const Format format);
 LLGL_EXPORT bool IsNormalizedFormat(const Format format);
 
 /**
-\brief Returns true if the specified hardware format is an integer format (like Format::RGBA8UInt, Format::R8SInt etc.).
-\remarks This does not include normalized formats such as Format::RGBA8UNorm.
+\brief Returns true if the specified hardware format is a strict integer format (like Format::RGBA8UInt, Format::R8SInt etc.).
+\remarks Unlike FormatFlags::IsInteger, this does \e not include normalized integer formats such as Format::RGBA8UNorm.
 While these types use an integer type as input, they are normalized to a fractional number in the closed range [0, 1].
 \see IsNormalizedFormat
 \see Format
@@ -567,8 +575,8 @@ While these types use an integer type as input, they are normalized to a fractio
 LLGL_EXPORT bool IsIntegerFormat(const Format format);
 
 /**
-\brief Returns true if the specified hardware format is a floating-point format (like Format::RGBA32Float, Format::R32Float etc.).
-\remarks This does not include depth-stencil formats or compressed formats.
+\brief Returns true if the specified hardware format is a strict floating-point format (like Format::RGBA32Float, Format::R32Float etc.).
+\remarks This does \e not include depth-stencil formats or compressed formats.
 \see IsDepthOrStencilFormat
 \see IsCompressedFormat
 \see Format

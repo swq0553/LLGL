@@ -13,6 +13,8 @@
 #include <LLGL/Types.h>
 #include <LLGL/VertexAttribute.h>
 #include <LLGL/FragmentAttribute.h>
+#include <LLGL/IncludeHandler.h>
+#include <LLGL/Deprecated.h>
 #include <cstddef>
 #include <vector>
 
@@ -42,8 +44,11 @@ enum class ShaderType
     Compute,        //!< Compute shader type.
 
     // Mesh pipeline.
-    Amplification,  //!< Amplification shader
+    Task,           //!< Task shader (also "Amplification Shader").
     Mesh,           //!< Mesh shader
+
+    //! \deprecated Since 0.05b; Use Task instead!
+    Amplification LLGL_DEPRECATED_ENUMCASE("Identifier `Amplification` is deprecated since 0.05b; Use `Task` instead!", "Task") = Task,
 };
 
 /**
@@ -64,6 +69,7 @@ enum class ShaderSourceType
 
 /**
 \brief Shader compilation flags enumeration.
+\remarks The shader compile flags are heavily backend dependent and are therefore silently ignored if they are not supported by the backend.
 \see ShaderDescriptor::flags
 \todo Rename to CompileFlags.
 */
@@ -163,6 +169,38 @@ struct ShaderCompileFlags
         \note Only supported with: Metal.
         */
         DefaultLibrary          = (1 << 8),
+
+        /**
+        \brief Specifies whether input/output attributes should be treated case insensitive.
+
+        \remarks This can be used to simplify compatibility with GLSL shaders of older versions that were cross-compiled from HLSL.
+        Some compiler toolchains use the HLSL \e semantic name for the GLSL counterpart, but HLSL attributes are already case-insensitive.
+
+        \remarks
+        Consider the following HLSL code snippet of a vertex shader:
+        \code{hlsl}
+        struct VertexInput {
+            float3 position : POSITION;
+            float2 texCoord : TEXCOORD;
+        };
+        \endcode
+        A hand-written translated GLSL shader for these attributes might look like this:
+        \code{glsl}
+        in vec3 position;
+        in vec2 texCoord;
+        \endcode
+        An auto-generated GLSL shader for these attributes on the other hand might look like this:
+        \code{glsl}
+        in vec3 POSITION;
+        in vec2 TEXCOORD;
+        \endcode
+        This flag relaxes this condition by making the lookup case-insensitive.
+        GLSL shaders with <code>#version 420</code> or higher can ignore this,
+        since attributes are already bound within the shader themselves via their <code>layout(location=N)</code> qualifier.
+
+        \note Only supported with: OpenGL.
+        */
+        CaseInsensitiveAttribs  = (1 << 9),
     };
 };
 
@@ -194,8 +232,8 @@ struct StageFlags
         //! Specifies the compute shader stage.
         ComputeStage        = (1 << 5),
 
-        //! Specifies the amplification shader stage (used in conjunction with a mesh shader).
-        AmplificationStage  = (1 << 6),
+        //! Specifies the task shader stage (used in conjunction with a mesh shader).
+        TaskStage           = (1 << 6),
 
         //! Specifies the mesh shader stage.
         MeshStage           = (1 << 7),
@@ -208,6 +246,9 @@ struct StageFlags
 
         //! Specifies all shader stages.
         AllStages           = (AllGraphicsStages | ComputeStage),
+
+        //! \deprecated Since 0.05b; Use TaskStage instead!
+        AmplificationStage LLGL_DEPRECATED_ENUMCASE("Identifier `AmplificationStage` is deprecated since 0.05b; Use `TaskStage` instead!", "TaskStage") = TaskStage,
     };
 };
 
@@ -303,6 +344,18 @@ struct ComputeShaderAttributes
 */
 struct ShaderDescriptor
 {
+    //TODO: remove these declaration once deprecation has ended {
+    LLGL_DEPRECATED_IGNORE_PUSH()
+    ShaderDescriptor(const ShaderDescriptor&) = default;
+    ShaderDescriptor(ShaderDescriptor&&) = default;
+    ShaderDescriptor& operator = (const ShaderDescriptor&) = default;
+    ShaderDescriptor& operator = (ShaderDescriptor&&) = default;
+    ~ShaderDescriptor() = default;
+    LLGL_DEPRECATED_IGNORE_POP()
+    // }
+
+    LLGL_DEPRECATED_IGNORE_PUSH()
+
     ShaderDescriptor() = default;
 
     //! Constructor to initialize the shader descriptor with a source filename.
@@ -328,11 +381,13 @@ struct ShaderDescriptor
     {
     }
 
+    LLGL_DEPRECATED_IGNORE_POP()
+
     /**
     \brief Optional name for debugging purposes. By default null.
     \remarks The final name of the native hardware resource is implementation defined.
     \remarks For the HLSL backend, this will also be used as shader name if the shader is provided in source form.
-    \see RenderSystemChild::SetName
+    \see RenderSystemChild::SetDebugName
     */
     const char*                 debugName       = nullptr;
 
@@ -378,7 +433,7 @@ struct ShaderDescriptor
     \remarks Here are a few examples:
     - For HLSL: \c "vs_5_0" specifies vertex shader model 5.0.
     - For Metal: \c "2.1" specifies shader version 2.1.
-    - For GLSL: \c "320 es" specifies that the GLSL version must be patched to "#version 300 es".
+    - For GLSL: \c "300 es" specifies that the GLSL version must be patched to "#version 300 es".
     \see https://msdn.microsoft.com/en-us/library/windows/desktop/jj215820(v=vs.85).aspx
     */
     const char*                 profile         = nullptr;
@@ -407,7 +462,16 @@ struct ShaderDescriptor
     */
     long                        flags           = 0;
 
-    //! Vertex (or geometry) shader specific attributes.
+    /**
+    \brief Optional include handler. By default, the backend specific default include handler will be used.
+    \remarks This can be used to handle customized search paths for include directories.
+    This is only relevant when compiling from source as binary files generally do not contain <code>#include</code>-directives.
+    \note Only supported with: Direct3D 11, Direct3D 12.
+    */
+    IncludeHandler*             includeHandler  = nullptr;
+
+    //! \deprecated Since 0.05b; Use GraphicsPipelineDescriptor::inputVertexAttribs instead!
+    LLGL_DEPRECATED("LLGL::ShaderDescriptor::vertex is deprecated since 0.05b; Use the `inputVertexAttribs` and `outputVertexAttribs` fields in LLGL::GraphicsPipelineDescriptor instead")
     VertexShaderAttributes      vertex;
 
     //! Fragment shader specific attributes.

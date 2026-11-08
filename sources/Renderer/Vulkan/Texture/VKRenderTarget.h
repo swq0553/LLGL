@@ -10,12 +10,13 @@
 
 
 #include <LLGL/RenderTarget.h>
-#include <vulkan/vulkan.h>
+#include "../Vulkan.h"
 #include "../VKPtr.h"
 #include "../RenderState/VKRenderPass.h"
 #include "VKDepthStencilBuffer.h"
 #include "VKColorBuffer.h"
 #include <memory>
+#include <vector>
 
 
 namespace LLGL
@@ -73,6 +74,13 @@ class VKRenderTarget final : public RenderTarget
         }
 
     private:
+
+        /*
+        Returns true if this render target resolves its multi-sampled depth-stencil attachment into a
+        single-sampled texture. Unlike a color resolve, this is opt-in: leaving it off is what lets the
+        multi-sampled depth buffer stay in tile memory.
+        */
+        bool HasDepthStencilResolve(const RenderTargetDescriptor& desc) const;
 
         void CreateRenderPass(
             VkDevice                        device,
@@ -150,6 +158,7 @@ class VKRenderTarget final : public RenderTarget
 
         std::uint32_t                   numColorAttachments_    = 0;
         VkSampleCountFlagBits           sampleCountBits_        = VK_SAMPLE_COUNT_1_BIT;
+        std::uint32_t                   numViews_               = 1;    // Number of views for multiview rendering (from the render pass), or 1.
 
 };
 

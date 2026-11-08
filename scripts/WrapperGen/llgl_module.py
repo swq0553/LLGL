@@ -5,7 +5,12 @@
 # Licensed under the terms of the BSD 3-Clause license (see LICENSE.txt).
 #
 
+import sys
 from enum import Enum
+
+def fatal(msg):
+    print(sys.argv[0] + ': ' + msg)
+    sys.exit(1)
 
 class StdType(Enum):
     UNDEFINED = 0
@@ -99,6 +104,7 @@ class LLGLMeta:
         'Display',
         'Fence',
         'Image',
+        'IncludeHandler',
         'PipelineCache',
         'PipelineLayout',
         'PipelineState',
@@ -119,7 +125,7 @@ class LLGLMeta:
         'Window'
     ]
     handles = [
-        'LLGLLogHandle'
+        'LLGLLogHandle',
     ]
     structFlags = {
         'AttachmentClear': 'ClearFlags',
@@ -261,7 +267,7 @@ class LLGLField:
 class LLGLRecord:
     name = ''
     base = None
-    fields = []
+    fields = [] # [LLGLField]
     deps = set() # Set of record names this record depends on
 
     def __init__(self, name):
@@ -300,11 +306,11 @@ class LLGLFunction:
 
 class LLGLModule:
     name = ''
-    enums = [] # Array of LLGLRecord
-    flags = [] # Array of LLGLRecord
-    structs = [] # Array of LLGLRecord
-    funcs = [] # Array of LLGLFunction
-    delegates = [] # Array of LLGLFunction
+    enums = [] # [LLGLRecord]
+    flags = [] # [LLGLRecord]
+    structs = [] # [LLGLRecord]
+    funcs = [] # [LLGLFunction]
+    delegates = [] # [LLGLFunction]
     typeDeps = set() # Set of types used in this header
 
     def __init__(self):
@@ -386,7 +392,7 @@ class LLGLModule:
                             print(f" ==> Missing '{dep}'")
 
                 printCyclicDependencies(pendingStructs[0], declaredTypenames)
-                fatal('error: failed to resolve dependencies')
+                fatal(f'error: failed to resolve dependencies for "{pendingStructs[0].name}"')
 
         return sortedStructs
 

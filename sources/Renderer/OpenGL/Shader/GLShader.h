@@ -11,7 +11,9 @@
 
 #include <LLGL/Shader.h>
 #include <LLGL/Report.h>
+#include <LLGL/Container/ArrayView.h>
 #include "../OpenGL.h"
+#include "../Buffer/GLVertexAttribute.h"
 #include "../../../Core/LinearStringContainer.h"
 #include <functional>
 
@@ -50,12 +52,10 @@ class GLShader : public Shader
     public:
 
         // Returns the vertex input attributes:
-        const GLShaderAttribute* GetVertexAttribs() const;
-        std::size_t GetNumVertexAttribs() const;
+        ArrayView<GLShaderAttribute> GetVertexAttribs() const;
 
         // Returns the vertex input attributes:
-        const GLShaderAttribute* GetFragmentAttribs() const;
-        std::size_t GetNumFragmentAttribs() const;
+        ArrayView<GLShaderAttribute> GetFragmentAttribs() const;
 
         // Returns the GLenum for this shader type, e.g. GL_VERTEX_SHADER.
         GLenum GetGLType() const;
@@ -66,14 +66,20 @@ class GLShader : public Shader
             return transformFeedbackVaryings_;
         }
 
-        // Returns the native shader ID. Can be either from glCreateShader or glCreateShaderProgramv.
-        inline GLuint GetID() const
+        // Returns the transform feedback buffer mode (GL_INTERLEAVED_ATTRIBS or GL_SEPARATE_ATTRIBS).
+        inline GLenum GetTransformFeedbackBufferMode() const
         {
-            return id_[PermutationDefault];
+            return transformFeedbackBufferMode_;
+        }
+
+        // Returns the native shader ID. Can be either from glCreateShader or glCreateShaderProgramv.
+        inline GLuint GetID(Permutation permutation) const
+        {
+            return id_[permutation];
         }
 
         // Returns the native shader ID for the specified permutation or the default permutation if the specified one is not available.
-        inline GLuint GetID(Permutation permutation) const
+        inline GLuint GetIDOrDefault(Permutation permutation) const
         {
             return (id_[permutation] != 0 ? id_[permutation] : id_[PermutationDefault]);
         }
@@ -82,6 +88,18 @@ class GLShader : public Shader
         inline bool IsSeparable() const
         {
             return isSeparable_;
+        }
+
+        // Returns true if this shader was created with the ShaderCompileFlags::CaseInsensitiveAttribs.
+        inline bool HasCaseInsensitiveAttribs() const
+        {
+            return hasCaseInvensitiveAttribs_;
+        }
+
+        // For backwards compatibility only.
+        inline const std::vector<GLVertexAttribute>& GetGLVertexAttributes() const
+        {
+            return vertexAttribs_;
         }
 
     public:
@@ -110,6 +128,26 @@ class GLShader : public Shader
             const char*                 versionOverride     = nullptr
         );
 
+        static void BuildVertexInputLayout(
+            ArrayView<VertexAttribute>      inVertexAttribs,
+            std::vector<GLShaderAttribute>& outGLVertexAttribs,
+            LinearStringContainer&          outGLAttribNames
+        );
+
+        static void BuildFragmentOutputLayout(
+            ArrayView<FragmentAttribute>    inFragmentAttribs,
+            std::vector<GLShaderAttribute>& outGLFragmentAttribs,
+            LinearStringContainer&          outGLAttribNames
+        );
+
+        static bool BuildTransformFeedbackVaryings(
+            ArrayView<VertexAttribute>      inVaryings,
+            std::vector<const char*>&       outGLTransformFeedbackVaryings,
+            LinearStringContainer&          outGLAttribNames,
+            GLenum&                         outGLBufferMode,
+            Report*                         report                          = nullptr
+        );
+
     protected:
 
         GLShader(const bool isSeparable, const ShaderDescriptor& desc);
@@ -126,19 +164,23 @@ class GLShader : public Shader
     private:
 
         void ReserveAttribs(const ShaderDescriptor& desc);
-        bool BuildVertexInputLayout(std::size_t numVertexAttribs, const VertexAttribute* vertexAttribs);
-        void BuildFragmentOutputLayout(std::size_t numFragmentAttribs, const FragmentAttribute* fragmentAttribs);
-        void BuildTransformFeedbackVaryings(std::size_t numVaryings, const VertexAttribute* varyings);
 
     private:
 
         const bool                      isSeparable_;
-        GLuint                          id_[PermutationCount]       = {}; // ID from either glCreateShader or glCreateShaderProgramv
+        const bool                      hasCaseInvensitiveAttribs_;
+
+        GLuint                          id_[PermutationCount]           = {}; // ID from either glCreateShader or glCreateShaderProgramv
+        Report                          report_;
+
+        //DEPRECATED {
         LinearStringContainer           shaderAttribNames_;
         std::vector<GLShaderAttribute>  shaderAttribs_;
-        std::size_t                     numVertexAttribs_           = 0;
+        std::size_t                     numVertexAttribs_               = 0;
         std::vector<const char*>        transformFeedbackVaryings_;
-        Report                          report_;
+        GLenum                          transformFeedbackBufferMode_    = GL_INTERLEAVED_ATTRIBS;
+        std::vector<GLVertexAttribute>  vertexAttribs_; // Needed for backwards compatibility to build vertex input layout as fallback
+        // }
 
 };
 

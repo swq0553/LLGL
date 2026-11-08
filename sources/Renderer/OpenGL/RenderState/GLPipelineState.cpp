@@ -25,7 +25,10 @@ GLPipelineState::GLPipelineState(
     bool                        isGraphicsPSO,
     const PipelineLayout*       pipelineLayout,
     PipelineCache*              pipelineCache,
-    const ArrayView<Shader*>&   shaders)
+    ArrayView<Shader*>          shaders,
+    ArrayView<VertexAttribute>  inputVertexAttribs,
+    ArrayView<VertexAttribute>  outputVertexAttribs
+)
 :
     isGraphicsPSO_ { isGraphicsPSO }
 {
@@ -38,7 +41,9 @@ GLPipelineState::GLPipelineState(
         if (GLShader::HasAnyShaderPermutation(permutation, shaders))
         {
             /* Create shader pipeline for current permutation */
-            shaderPipelines_[permutation] = GLStatePool::Get().CreateShaderPipeline(shaders.size(), shaders.data(), permutation, pipelineCacheGL);
+            shaderPipelines_[permutation] = GLStatePool::Get().CreateShaderPipeline(
+                shaders, inputVertexAttribs, outputVertexAttribs, permutation, pipelineCacheGL, &report_
+            );
 
             /* Query information log and stop linking shader pipelines if the default permutation has errors */
             if (permutation == GLShader::PermutationDefault)
@@ -74,11 +79,7 @@ GLPipelineState::GLPipelineState(
         }
 
         /* Build uniform table */
-        for_range(permutationIndex, GLShader::PermutationCount)
-        {
-            const GLShader::Permutation permutation = static_cast<GLShader::Permutation>(permutationIndex);
-            BuildUniformMap(permutation, pipelineLayout_->GetUniforms());
-        }
+        BuildUniformMap(pipelineLayout_->GetUniforms());
 
         /* Cache barriers bitfield */
         barriers_ = pipelineLayout_->GetBarriersBitfield();
@@ -99,26 +100,28 @@ const Report* GLPipelineState::GetReport() const
 
 void GLPipelineState::Bind(GLStateManager& stateMngr)
 {
-    /* Select shader pipeline permutation depending on what is needed for the current framebuffer */
-    const GLShader::Permutation shaderPipelinePermutation =
-    (
-        stateMngr.GetBoundRenderTarget() != nullptr && shaderPipelines_[GLShader::PermutationFlippedYPosition].get() != nullptr
-            ? GLShader::PermutationFlippedYPosition
-            : GLShader::PermutationDefault
-    );
-    GLShaderPipeline* shaderPipeline = shaderPipelines_[shaderPipelinePermutation].get();
+    /*
+    If this PSO has multiple permutations, then it must be bound with an indirection,
+    so the state manager can decide when to switch between permutations depending on whether a swap-chain or render-target is bound.
+    */
+    stateMngr.BindDeferredShaderPipeline(*this);
+
+    /* Bind static samplers */
+    if (pipelineLayout_ != nullptr)
+        pipelineLayout_->BindStaticSamplers(stateMngr);
+}
+
+void GLPipelineState::BindShaderPipeline(GLStateManager& stateMngr, GLShader::Permutation permutation)
+{
+    GLShaderPipeline* shaderPipeline = shaderPipelines_[permutation].get();
 
     /* Bind shader program and discard rasterizer if there is no fragment shader */
-    LLGL_ASSERT(shaderPipeline != nullptr, "GL shader permutation [%d] not compiled", static_cast<int>(shaderPipelinePermutation));
+    LLGL_ASSERT(shaderPipeline != nullptr, "GL shader permutation [%d] not compiled", static_cast<int>(permutation));
     shaderPipeline->Bind(stateMngr);
 
     /* Update resource slots in shader program (if necessary) */
     if (shaderBindingLayout_)
         shaderPipeline->BindResourceSlots(*shaderBindingLayout_, &bufferInterfaceMap_);
-
-    /* Bind static samplers */
-    if (pipelineLayout_ != nullptr)
-        pipelineLayout_->BindStaticSamplers(stateMngr);
 }
 
 
@@ -127,20 +130,30 @@ void GLPipelineState::Bind(GLStateManager& stateMngr)
  */
 
 //TODO: support separate shaders; each separable shader needs its own set of uniform locations
-void GLPipelineState::BuildUniformMap(GLShader::Permutation permutation, const std::vector<UniformDescriptor>& uniforms)
+void GLPipelineState::BuildUniformMap(const std::vector<UniformDescriptor>& uniforms)
 {
-    if (shaderPipelines_[permutation].get() != nullptr && !uniforms.empty())
+    if (uniforms.empty())
+        return;
+
+    for_range(permutationIndex, GLShader::PermutationCount)
     {
-        const GLuint program = shaderPipelines_[permutation]->GetID();
+        if (const GLShaderPipeline* shaderPipeline = shaderPipelines_[permutationIndex].get())
+        {
+            const GLuint program = shaderPipeline->GetID();
 
-        /* Build name-to-index map of all active uniforms, since glGetUniformLocation() does *not* map to the active uniform index */
-        GLNameToUniformMap nameToUniformMap;
-        BuildNameToActiveUniformMap(program, nameToUniformMap);
+            /* Build name-to-index map of all active uniforms, since glGetUniformLocation() does *not* map to the active uniform index */
+            GLNameToUniformMap nameToUniformMap;
+            BuildNameToActiveUniformMap(program, nameToUniformMap);
 
-        /* Build uniform locations from input descriptors */
-        uniformMap_.resize(uniforms.size());
-        for_range(i, uniforms.size())
-            BuildUniformLocation(program, uniformMap_[i], uniforms[i], nameToUniformMap);
+            /* Build uniform locations from input descriptors */
+            const std::size_t uniformMapOffset = uniformMap_.size();
+            if (permutationIndex > 0)
+                permutationUniformMapOffset_[permutationIndex - 1] = static_cast<std::uint32_t>(uniformMapOffset);
+            uniformMap_.resize(uniformMapOffset + uniforms.size());
+
+            for_range(i, uniforms.size())
+                BuildUniformLocation(program, uniformMap_[uniformMapOffset + i], uniforms[i], nameToUniformMap);
+        }
     }
 }
 
@@ -148,7 +161,7 @@ void GLPipelineState::BuildUniformMap(GLShader::Permutation permutation, const s
 Returns the name of an active GL uniform as an identifier, i.e. removing any subscripts.
 Arrays of uniforms are reflected with a subscript for the first entry,
 e.g. "uniform inputTextures[2];" yields the active uniform name "inputTextures[0]".
-This functions removes the subscript, effecitvely returning "inputTextures" for this example.
+This functions removes the subscript, effectively returning "inputTextures" for this example.
 */
 static std::string GetActiveUniformNameAsIdent(const GLchar* uniformName)
 {

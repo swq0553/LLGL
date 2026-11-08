@@ -42,6 +42,8 @@ enum class AttachmentLoadOp
 /**
 \brief Enumeration for render pass attachment store operations.
 \see AttachmentFormatDescriptor
+\todo Add new field `Resolve` to allow users to control whether the end of a render-pass should immediately resolve multi-sampled render targets or not.
+This way multiple render-passes can render into the same multi-sampled render-targets while only the last one resolves them into the standard textures.
 */
 enum class AttachmentStoreOp
 {
@@ -51,8 +53,37 @@ enum class AttachmentStoreOp
     */
     Undefined,
 
-    //! Stores the outcome in the respective render target attachment.
+    //! Store the outcome into the respective render-target attachment.
     Store,
+
+#if 0 //TODO: not implemented yet
+    /**
+    \brief Store and resolve the average sample value of a multi-sampled render-target attachment into its respective resolve attachment.
+    \remarks This can only be used with non-integer attachment formats, e.g. Format::R32Float, Format::RGBA8UNorm etc.
+    Use ResolveMin, ResolveMax, and ResolveSample0 for integer attachment formats, e.g. Format::R32UInt.
+    \see RenderTargetDescriptor::resolveAttachments
+    \see IsIntegerFormat
+    */
+//  Resolve,
+
+    /**
+    \brief Store and resolve the minimum sample value of a multi-sampled render-target attachment into its respective resolve attachment.
+    \see RenderTargetDescriptor::resolveAttachments
+    */
+//  ResolveMin,
+
+    /**
+    \brief Store and resolve the maximum sample value of a multi-sampled render-target attachment into its respective resolve attachment.
+    \see RenderTargetDescriptor::resolveAttachments
+    */
+//  ResolveMax,
+
+    /**
+    \brief Store and resolve sample 0 of a multi-sampled render-target attachment into its respective resolve attachment.
+    \see RenderTargetDescriptor::resolveAttachments
+    */
+//  ResolveSample0,
+#endif
 };
 
 
@@ -118,7 +149,7 @@ struct RenderPassDescriptor
     /**
     \brief Optional name for debugging purposes. By default null.
     \remarks The final name of the native hardware resource is implementation defined.
-    \see RenderSystemChild::SetName
+    \see RenderSystemChild::SetDebugName
     */
     const char*                 debugName           = nullptr;
 
@@ -158,6 +189,24 @@ struct RenderPassDescriptor
     \see RenderingLimits::maxNoAttachmentSamples
     */
     std::uint32_t               samples             = 1;
+
+    /**
+    \brief Specifies the number of views for multiview (single-pass layered) rendering. By default 1.
+    \remarks If this is greater than 1, the render pass is a multiview render pass:
+    a single draw command is broadcast to \c views consecutive array layers of the render target,
+    starting at AttachmentDescriptor::arrayLayer. Each invocation can read its layer index via
+    SystemValue::ViewIndex to index per-view data (e.g. view-projection matrices for single-pass stereo or
+    cascaded shadow maps). All render target attachments used with this render pass must be array textures
+    with at least <code>arrayLayer + views</code> layers.
+    \remarks This must not be greater than RenderingLimits::maxViews and requires RenderingFeatures::hasMultiview.
+    A value of 0 is treated the same as 1 (multiview disabled).
+    \note Only supported with: Vulkan, Direct3D 12.
+    \see RenderingFeatures::hasMultiview
+    \see RenderingLimits::maxViews
+    \see SystemValue::ViewIndex
+    \see AttachmentDescriptor::arrayLayer
+    */
+    std::uint32_t               views               = 1;
 };
 
 

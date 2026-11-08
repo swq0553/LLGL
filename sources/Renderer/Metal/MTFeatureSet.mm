@@ -7,7 +7,10 @@
 
 #include "MTFeatureSet.h"
 #include "MTDevice.h"
+#include "../../Core/CoreUtils.h"
+#include "MTTypes.h"
 #include "OSXAvailability.h"
+#include "Command/MTCommandContext.h"
 #include <LLGL/ShaderFlags.h>
 #include <AvailabilityMacros.h>
 #include <initializer_list>
@@ -17,6 +20,13 @@
 namespace LLGL
 {
 
+
+static MTFormatCapabilities g_formatCaps;
+
+const MTFormatCapabilities& MTFormatCapabilities::Get()
+{
+    return g_formatCaps;
+}
 
 // Converts the specified Metal feature set into a fixed version number
 static int FeatureSetToVersion(MTLFeatureSet fset)
@@ -45,24 +55,57 @@ static int FeatureSetToVersion(MTLFeatureSet fset)
     return 100; // 1.0
 }
 
+// Removes all MTLPixelFormat entries that don't deliver a valid mapping from MTTypes.
+static void MTFilterPixelFormats(std::vector<Format>& formats)
+{
+    RemoveAllFromListIf(
+        formats,
+        [](Format format) -> bool
+        {
+            return (MTTypes::ToMTLPixelFormatOrDefault(format) == MTLPixelFormatInvalid);
+        }
+    );
+}
+
+// Removes all MTLVertexFormat entries that don't deliver a valid mapping from MTTypes.
+static void MTFilterVertexFormats(std::vector<Format>& formats)
+{
+    RemoveAllFromListIf(
+        formats,
+        [](Format format) -> bool
+        {
+            return (MTTypes::ToMTLVertexFormatOrDefault(format) == MTLVertexFormatInvalid);
+        }
+    );
+}
+
+static void GetDefaultSupportedMTBaseFormats(std::vector<Format>& formats)
+{
+    formats.insert(
+        formats.end(),
+        {
+            Format::R8UNorm,            Format::R8SNorm,            Format::R8UInt,             Format::R8SInt,
+            Format::R16UNorm,           Format::R16SNorm,           Format::R16UInt,            Format::R16SInt,            Format::R16Float,
+            Format::R32UInt,            Format::R32SInt,            Format::R32Float,
+            Format::RG8UNorm,           Format::RG8SNorm,           Format::RG8UInt,            Format::RG8SInt,
+            Format::RG16UNorm,          Format::RG16SNorm,          Format::RG16UInt,           Format::RG16SInt,           Format::RG16Float,
+            Format::RG32UInt,           Format::RG32SInt,           Format::RG32Float,
+            Format::RGBA8UNorm,         Format::RGBA8SNorm,         Format::RGBA8UInt,          Format::RGBA8SInt,
+            Format::RGBA16UNorm,        Format::RGBA16SNorm,        Format::RGBA16UInt,         Format::RGBA16SInt,         Format::RGBA16Float,
+            Format::RGBA32UInt,         Format::RGBA32SInt,         Format::RGBA32Float,
+        }
+    );
+}
+
 static std::vector<Format> GetDefaultSupportedMTTextureFormats()
 {
-    return
+    std::vector<Format> textureFormats =
     {
         Format::A8UNorm,
-        Format::R8UNorm,            Format::R8SNorm,            Format::R8UInt,             Format::R8SInt,
-        Format::R16UNorm,           Format::R16SNorm,           Format::R16UInt,            Format::R16SInt,            Format::R16Float,
-        Format::R32UInt,            Format::R32SInt,            Format::R32Float,
-        Format::RG8UNorm,           Format::RG8SNorm,           Format::RG8UInt,            Format::RG8SInt,
-        Format::RG16UNorm,          Format::RG16SNorm,          Format::RG16UInt,           Format::RG16SInt,           Format::RG16Float,
-        Format::RG32UInt,           Format::RG32SInt,           Format::RG32Float,
-        Format::RGBA8UNorm,         Format::RGBA8UNorm_sRGB,    Format::RGBA8SNorm,         Format::RGBA8UInt,          Format::RGBA8SInt,
-        Format::RGBA16UNorm,        Format::RGBA16SNorm,        Format::RGBA16UInt,         Format::RGBA16SInt,         Format::RGBA16Float,
-        Format::RGBA32UInt,         Format::RGBA32SInt,         Format::RGBA32Float,
-        Format::BGRA8UNorm,         Format::BGRA8UNorm_sRGB,
-        Format::RGB10A2UNorm,       Format::RGB10A2UInt,        Format::RG11B10Float,       Format::RGB9E5Float,        Format::BGR5A1UNorm,
 
-        Format::D16UNorm,           Format::D24UNormS8UInt,     Format::D32Float,           Format::D32FloatS8X24UInt,
+        Format::RGB10A2UNorm,       Format::RGB10A2UInt,        Format::RG11B10Float,       Format::RGB9E5Float,        Format::BGR5A1UNorm,
+        Format::RGBA8UNorm_sRGB,    Format::BGRA8UNorm,         Format::BGRA8UNorm_sRGB,
+        Format::D16UNorm,           Format::D32Float,           Format::D32FloatS8X24UInt,
 
         #ifndef LLGL_OS_IOS
         Format::BC1UNorm,           Format::BC1UNorm_sRGB,
@@ -70,6 +113,8 @@ static std::vector<Format> GetDefaultSupportedMTTextureFormats()
         Format::BC3UNorm,           Format::BC3UNorm_sRGB,
         Format::BC4UNorm,           Format::BC4SNorm,
         Format::BC5UNorm,           Format::BC5SNorm,
+        Format::BC6HUFloat,         Format::BC6HSFloat,
+        Format::BC7UNorm,           Format::BC7UNorm_sRGB,
         #endif
 
         Format::ASTC4x4,            Format::ASTC4x4_sRGB,
@@ -89,6 +134,25 @@ static std::vector<Format> GetDefaultSupportedMTTextureFormats()
 
         Format::ETC2UNorm,          Format::ETC2UNorm_sRGB,
     };
+    GetDefaultSupportedMTBaseFormats(textureFormats);
+    MTFilterPixelFormats(textureFormats);
+    return textureFormats;
+}
+
+static std::vector<Format> MTGetSupportedVertexFormats()
+{
+    std::vector<Format> vertexFormats;
+    GetDefaultSupportedMTBaseFormats(vertexFormats);
+    MTFilterVertexFormats(vertexFormats);
+    return vertexFormats;
+}
+
+// Depth and stencil resolve are both supported on Apple5 and Mac2 GPU families
+static bool MTSupportsDepthStencilResolve(id<MTLDevice> device)
+{
+    if (@available(macOS 10.15, iOS 13.0, *))
+        return ([device supportsFamily:MTLGPUFamilyApple5] || [device supportsFamily:MTLGPUFamilyMac2]);
+    return false;
 }
 
 static NSUInteger GetMaxMTBufferSize(id<MTLDevice> device)
@@ -104,6 +168,8 @@ static NSUInteger GetMaxMTBufferSize(id<MTLDevice> device)
 // see https://developer.apple.com/metal/Metal-Feature-Set-Tables.pdf
 void LoadFeatureSetCaps(id<MTLDevice> device, MTLFeatureSet fset, RenderingCapabilities& caps)
 {
+    g_formatCaps = {};
+
     /* Set clipping origin and depth range */
     caps.screenOrigin   = ScreenOrigin::UpperLeft;
     caps.clippingRange  = ClippingRange::ZeroToOne;
@@ -111,19 +177,72 @@ void LoadFeatureSetCaps(id<MTLDevice> device, MTLFeatureSet fset, RenderingCapab
     /* Query supported hardware texture formats */
     caps.textureFormats = GetDefaultSupportedMTTextureFormats();
 
+    #ifndef LLGL_OS_IOS
+    if (@available(macOS 10.13, *))
+    {
+        if ([device isDepth24Stencil8PixelFormatSupported])
+        {
+            caps.textureFormats.push_back(Format::D24UNormS8UInt);
+            g_formatCaps.hasD24S8UIntFormat = true;
+        }
+    }
+    #endif
+
+    /* Packed 16-bit formats are only supported on Apple GPUs */
+    #ifdef LLGL_OS_IOS
+    caps.textureFormats.push_back(Format::B5G6R5UNorm);
+    #else
+    if (@available(macOS 11.0, *))
+    {
+        if ([device supportsFamily:MTLGPUFamilyApple1])
+            caps.textureFormats.push_back(Format::B5G6R5UNorm);
+    }
+    #endif
+
+    /* Query supported hardware vertex formats */
+    caps.vertexFormats = MTGetSupportedVertexFormats();
+
+    /*
+    Query supported swap-chain formats.
+    The color formats are the ones a CAMetalLayer can be configured with; MTSwapChain takes its
+    color format from MTRenderPass, which maps SwapChainDescriptor::colorFormat directly.
+    */
+    caps.swapChainColorFormats = { Format::BGRA8UNorm, Format::BGRA8UNorm_sRGB, Format::RGBA16Float };
+
+    /* These are the formats MTRenderPass can produce for a swap-chain; see GetDepthStencilMTLPixelFormat */
+    caps.swapChainDepthStencilFormats = { Format::D32Float, Format::D32FloatS8X24UInt };
+
+    if (g_formatCaps.hasD24S8UIntFormat)
+        caps.swapChainDepthStencilFormats.push_back(Format::D24UNormS8UInt);
+
+    if (@available(macOS 10.12, iOS 13.0, *))
+        caps.swapChainDepthStencilFormats.push_back(Format::D16UNorm);
+
     /* Specify supported shading languages */
     const int version = FeatureSetToVersion(fset);
 
     caps.shadingLanguages = { ShadingLanguage::Metal, ShadingLanguage::Metal_1_0 };
 
-    if (version >= 101)
-        caps.shadingLanguages.push_back(ShadingLanguage::Metal_1_1);
-    if (version >= 102)
-        caps.shadingLanguages.push_back(ShadingLanguage::Metal_1_2);
-    if (version >= 201)
+    struct MetalVersion
     {
-        caps.shadingLanguages.push_back(ShadingLanguage::Metal_2_0);
-        caps.shadingLanguages.push_back(ShadingLanguage::Metal_2_1);
+        int             versionNo;
+        ShadingLanguage language;
+    };
+
+    for (const MetalVersion& versionMapping :
+        {
+            MetalVersion{ 101, ShadingLanguage::Metal_1_1 },
+            MetalVersion{ 102, ShadingLanguage::Metal_1_2 },
+            MetalVersion{ 200, ShadingLanguage::Metal_2_0 },
+            MetalVersion{ 201, ShadingLanguage::Metal_2_1 },
+            MetalVersion{ 202, ShadingLanguage::Metal_2_2 },
+            MetalVersion{ 203, ShadingLanguage::Metal_2_3 },
+            MetalVersion{ 204, ShadingLanguage::Metal_2_4 },
+            MetalVersion{ 300, ShadingLanguage::Metal_3_0 },
+        })
+    {
+        if (version >= versionMapping.versionNo)
+            caps.shadingLanguages.push_back(versionMapping.language);
     }
 
     /* Specify features */
@@ -153,12 +272,14 @@ void LoadFeatureSetCaps(id<MTLDevice> device, MTLFeatureSet fset, RenderingCapab
     features.hasConservativeRasterization   = false;
     features.hasStreamOutputs               = false;
     features.hasLogicOp                     = false;
+    features.hasDepthStencilResolve         = MTSupportsDepthStencilResolve(device);
 
     /* Specify limits */
     auto& limits = caps.limits;
 
     limits.maxBufferSize                    = GetMaxMTBufferSize(device);
     limits.maxConstantBufferSize            = 65536u;
+    limits.maxVertexBufferInputs            = MTCommandContext::maxNumVertexBuffers;
     limits.max1DTextureSize                 = 16384u;
     limits.max2DTextureSize                 = 16384u;
     limits.max3DTextureSize                 = 2048u;

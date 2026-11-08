@@ -24,12 +24,14 @@ namespace LLGL
 {
 
 
-static const char* g_requiredVulkanExtensions[] =
+// LLGL's required device extensions are shared with the XR Vulkan binding via VKGetRequiredDeviceExtensions().
+static std::size_t CountRequiredDeviceExtensions()
 {
-    VK_KHR_SWAPCHAIN_EXTENSION_NAME,
-    VK_KHR_MAINTENANCE1_EXTENSION_NAME,
-    nullptr,
-};
+    std::size_t count = 0;
+    for (const char** p = VKGetRequiredDeviceExtensions(); *p != nullptr; ++p)
+        ++count;
+    return count;
+}
 
 static bool CheckDeviceExtensionSupport(
     VkPhysicalDevice                    physicalDevice,
@@ -61,8 +63,8 @@ static bool IsPhysicalDeviceSuitable(
     std::vector<VkExtensionProperties> extensions;
     bool suitable = CheckDeviceExtensionSupport(
         physicalDevice,
-        g_requiredVulkanExtensions,
-        (sizeof(g_requiredVulkanExtensions) / sizeof(g_requiredVulkanExtensions[0]) - 1),
+        VKGetRequiredDeviceExtensions(),
+        CountRequiredDeviceExtensions(),
         extensions
     );
 
@@ -87,12 +89,17 @@ static bool IsPreferredDeviceVendor(DeviceVendor vendor, long preferredDeviceFla
     }
 }
 
-bool VKPhysicalDevice::PickPhysicalDevice(VkInstance instance, const ArrayView<const char*>& supportedInstanceExtensions, long preferredDeviceFlags)
+bool VKPhysicalDevice::PickPhysicalDevice(
+    VkInstance                      instance,
+    const ArrayView<const char*>&   supportedInstanceExtensions,
+    long                            preferredDeviceFlags,
+    const ArrayView<const char*>&   requiredUserExtensions,
+    const ArrayView<const char*>&   optionalUserExtensions)
 {
     /* Query all physical devices and pick suitable */
     std::vector<VkPhysicalDevice> physicalDevices = VKQueryPhysicalDevices(instance);
 
-    auto TryPickPhysicalDevice = [this, &supportedInstanceExtensions](VkPhysicalDevice device) -> bool
+    auto TryPickPhysicalDevice = [this, &supportedInstanceExtensions, &requiredUserExtensions, &optionalUserExtensions](VkPhysicalDevice device) -> bool
     {
         if (!IsPhysicalDeviceSuitable(device, supportedExtensions_))
         {
@@ -104,7 +111,7 @@ bool VKPhysicalDevice::PickPhysicalDevice(VkInstance instance, const ArrayView<c
         for (const VkExtensionProperties& extension : supportedExtensions_)
             supportedExtensionNames_.insert(extension.extensionName);
 
-        if (!EnableExtensions(g_requiredVulkanExtensions, true))
+        if (!EnableExtensions(VKGetRequiredDeviceExtensions(), true) || !EnableExtensions(requiredUserExtensions, true))
         {
             /* Stop considering this physical device, because some required extensions are not supported */
             supportedExtensionNames_.clear();
@@ -114,6 +121,7 @@ bool VKPhysicalDevice::PickPhysicalDevice(VkInstance instance, const ArrayView<c
         /* Store device and store properties */
         physicalDevice_ = device;
         EnableExtensions(GetOptionalExtensions());
+        EnableExtensions(optionalUserExtensions);
         QueryDeviceInfo();
 
         return true;
@@ -150,37 +158,72 @@ void VKPhysicalDevice::LoadPhysicalDeviceWeakRef(VkPhysicalDevice physicalDevice
     LLGL_ASSERT(physicalDevice != VK_NULL_HANDLE);
     LLGL_ASSERT(physicalDevice_ == VK_NULL_HANDLE, "physical Vulkan device already set");
     physicalDevice_ = physicalDevice;
+
+    /*
+    Populate the supported-extension set for the adopted device, mirroring PickPhysicalDevice. SupportsExtension()
+    and the feature/property queries below (QueryDeviceInfo) read this set, so without it every device-extension-
+    gated capability (multiview, mesh shaders, conservative rasterization, ...) would be reported as unsupported
+    for a device created externally (e.g. by the OpenXR Vulkan binding) even though it advertises and enables them.
+    The name pointers reference the persistent supportedExtensions_ member, so store into that member directly.
+    */
+    supportedExtensions_ = VKQueryDeviceExtensionProperties(physicalDevice_);
+    for (const VkExtensionProperties& extension : supportedExtensions_)
+        supportedExtensionNames_.insert(extension.extensionName);
+
+    /*
+    Populate enabledExtensionNames_ too, mirroring PickPhysicalDevice. The OpenXR runtime creates the VkDevice from
+    the same required+optional extension set (see the Vulkan OpenXR graphics binding), but LLGL only adopts the device
+    as a weak ref, so nothing else records which extensions are active. VKLoadDeviceExtensions() reads this list to
+    populate the extension registry that HasExtension() queries; without it, extension-gated features such as
+    KHR_multiview (single-pass stereo) would be treated as disabled even though the adopted device enabled them.
+    */
+    EnableExtensions(VKGetRequiredDeviceExtensions(), /*required:*/ false);
+    EnableExtensions(GetOptionalExtensions());
+
     QueryDeviceInfo();
+}
+
+static void GetSupportedVKBaseFormats(std::vector<Format>& formats)
+{
+    formats.insert(
+        formats.end(),
+        {
+            Format::R8UNorm,            Format::R8SNorm,            Format::R8UInt,             Format::R8SInt,
+            Format::R16UNorm,           Format::R16SNorm,           Format::R16UInt,            Format::R16SInt,            Format::R16Float,
+            Format::R32UInt,            Format::R32SInt,            Format::R32Float,
+            Format::R64Float,
+            Format::RG8UNorm,           Format::RG8SNorm,           Format::RG8UInt,            Format::RG8SInt,
+            Format::RG16UNorm,          Format::RG16SNorm,          Format::RG16UInt,           Format::RG16SInt,           Format::RG16Float,
+            Format::RG32UInt,           Format::RG32SInt,           Format::RG32Float,
+            Format::RG64Float,
+            Format::RGB8UNorm,          Format::RGB8SNorm,          Format::RGB8UInt,           Format::RGB8SInt,
+            Format::RGB16UNorm,         Format::RGB16SNorm,         Format::RGB16UInt,          Format::RGB16SInt,          Format::RGB16Float,
+            Format::RGB32UInt,          Format::RGB32SInt,          Format::RGB32Float,
+            Format::RGB64Float,
+            Format::RGBA8UNorm,         Format::RGBA8SNorm,         Format::RGBA8UInt,          Format::RGBA8SInt,
+            Format::RGBA16UNorm,        Format::RGBA16SNorm,        Format::RGBA16UInt,         Format::RGBA16SInt,         Format::RGBA16Float,
+            Format::RGBA32UInt,         Format::RGBA32SInt,         Format::RGBA32Float,
+            Format::RGBA64Float,
+        }
+    );
 }
 
 static std::vector<Format> GetDefaultSupportedVKTextureFormats()
 {
-    return
+    std::vector<Format> textureFormats =
     {
         Format::A8UNorm,
-        Format::R8UNorm,            Format::R8SNorm,            Format::R8UInt,             Format::R8SInt,
-        Format::R16UNorm,           Format::R16SNorm,           Format::R16UInt,            Format::R16SInt,            Format::R16Float,
-        Format::R32UInt,            Format::R32SInt,            Format::R32Float,
-        Format::R64Float,
-        Format::RG8UNorm,           Format::RG8SNorm,           Format::RG8UInt,            Format::RG8SInt,
-        Format::RG16UNorm,          Format::RG16SNorm,          Format::RG16UInt,           Format::RG16SInt,           Format::RG16Float,
-        Format::RG32UInt,           Format::RG32SInt,           Format::RG32Float,
-        Format::RG64Float,
-        Format::RGB8UNorm,          Format::RGB8UNorm_sRGB,     Format::RGB8SNorm,          Format::RGB8UInt,           Format::RGB8SInt,
-        Format::RGB16UNorm,         Format::RGB16SNorm,         Format::RGB16UInt,          Format::RGB16SInt,          Format::RGB16Float,
-        Format::RGB32UInt,          Format::RGB32SInt,          Format::RGB32Float,
-        Format::RGB64Float,
-        Format::RGBA8UNorm,         Format::RGBA8UNorm_sRGB,    Format::RGBA8SNorm,         Format::RGBA8UInt,          Format::RGBA8SInt,
-        Format::RGBA16UNorm,        Format::RGBA16SNorm,        Format::RGBA16UInt,         Format::RGBA16SInt,         Format::RGBA16Float,
-        Format::RGBA32UInt,         Format::RGBA32SInt,         Format::RGBA32Float,
-        Format::RGBA64Float,
-        Format::BGRA8UNorm,         Format::BGRA8UNorm_sRGB,    Format::BGRA8SNorm,         Format::BGRA8UInt,          Format::BGRA8SInt,
+        Format::RGB8UNorm_sRGB,     Format::RGBA8UNorm_sRGB,    Format::BGRA8UNorm_sRGB,
+        Format::BGRA8SNorm,         Format::BGRA8UInt,          Format::BGRA8SInt,
         Format::RGB10A2UNorm,       Format::RGB10A2UInt,        Format::RG11B10Float,       Format::RGB9E5Float,        Format::BGR5A1UNorm,
+        Format::B5G6R5UNorm,        Format::BGRA4UNorm,
         Format::D16UNorm,           Format::D24UNormS8UInt,     Format::D32Float,           Format::D32FloatS8X24UInt,
     };
+    GetSupportedVKBaseFormats(textureFormats);
+    return textureFormats;
 }
 
-static std::vector<Format> GetCompressedVKTextureFormatsS3TC()
+static std::vector<Format> GetCompressedVKTextureFormatsBC()
 {
     return
     {
@@ -189,6 +232,8 @@ static std::vector<Format> GetCompressedVKTextureFormatsS3TC()
         Format::BC3UNorm,   Format::BC3UNorm_sRGB,
         Format::BC4UNorm,   Format::BC4SNorm,
         Format::BC5UNorm,   Format::BC5SNorm,
+        Format::BC6HUFloat, Format::BC6HSFloat,
+        Format::BC7UNorm,   Format::BC7UNorm_sRGB,
     };
 }
 
@@ -221,6 +266,16 @@ static std::vector<Format> GetCompressedVKTextureFormatsETC2()
     };
 }
 
+static std::vector<Format> GetDefaultSupportedVKVertexFormats()
+{
+    std::vector<Format> vertexFormats =
+    {
+        Format::BGRA8UNorm // Only one BGRA vertex format
+    };
+    GetSupportedVKBaseFormats(vertexFormats);
+    return vertexFormats;
+}
+
 // Structure for the Vulkan pipeline cache ID
 struct VKPipelineCacheID
 {
@@ -229,6 +284,54 @@ struct VKPipelineCacheID
     std::uint32_t deviceID;                         // VkPhysicalDeviceProperties::deviceID
     std::uint8_t  pipelineCacheUUID[VK_UUID_SIZE];  // VkPhysicalDeviceProperties::pipelineCacheUUID
 };
+
+/*
+Returns the subset of 'candidates' the physical device supports with the specified format features
+for optimally tiled images. Used to report which swap-chain formats VKSwapChain can actually pick.
+*/
+static std::vector<Format> FilterVKSupportedFormats(
+    VkPhysicalDevice            physicalDevice,
+    const ArrayView<Format>&    candidates,
+    VkFormatFeatureFlags        formatFeatures)
+{
+    std::vector<Format> formats;
+    formats.reserve(candidates.size());
+
+    for (const Format format : candidates)
+    {
+        VkFormatProperties formatProps = {};
+        vkGetPhysicalDeviceFormatProperties(physicalDevice, VKTypes::Map(format), &formatProps);
+        if ((formatProps.optimalTilingFeatures & formatFeatures) == formatFeatures)
+            formats.push_back(format);
+    }
+
+    return formats;
+}
+
+static std::vector<Format> GetSupportedVKSwapChainColorFormats(VkPhysicalDevice physicalDevice)
+{
+    /*
+    Color formats VKSwapChain::PickSwapSurfaceFormat can select, filtered by device support.
+    Presentation support additionally depends on the surface, which is not known at this point.
+    */
+    static const Format candidates[] =
+    {
+        Format::RGBA8UNorm, Format::RGBA8UNorm_sRGB,
+        Format::BGRA8UNorm, Format::BGRA8UNorm_sRGB,
+        Format::RGB10A2UNorm, Format::RGBA16Float,
+    };
+    return FilterVKSupportedFormats(physicalDevice, candidates, VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT);
+}
+
+static std::vector<Format> GetSupportedVKSwapChainDepthStencilFormats(VkPhysicalDevice physicalDevice)
+{
+    /* Depth-stencil formats VKSwapChain::PickDepthStencilFormat can select, filtered by device support */
+    static const Format candidates[] =
+    {
+        Format::D16UNorm, Format::D24UNormS8UInt, Format::D32Float, Format::D32FloatS8X24UInt,
+    };
+    return FilterVKSupportedFormats(physicalDevice, candidates, VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT);
+}
 
 static void GetVKPipelineCacheID(const VkPhysicalDeviceProperties& properties, std::vector<char>& outCacheID)
 {
@@ -254,8 +357,7 @@ void VKPhysicalDevice::QueryRendererInfo(RendererInfo& info)
 
 void VKPhysicalDevice::QueryRenderingCaps(RenderingCapabilities& caps)
 {
-    /* Map limits to output rendering capabilites */
-    const VkPhysicalDeviceFeatures& features = features_.features;
+    /* Map limits to output rendering capabilities */
     const VkPhysicalDeviceLimits& limits = properties_.limits;
 
     /* Query common attributes */
@@ -263,20 +365,23 @@ void VKPhysicalDevice::QueryRenderingCaps(RenderingCapabilities& caps)
     caps.clippingRange                              = ClippingRange::ZeroToOne;
     caps.shadingLanguages                           = { ShadingLanguage::SPIRV, ShadingLanguage::SPIRV_100 };
     caps.textureFormats                             = GetDefaultSupportedVKTextureFormats();
+    caps.vertexFormats                              = GetDefaultSupportedVKVertexFormats();
+    caps.swapChainColorFormats                      = GetSupportedVKSwapChainColorFormats(physicalDevice_);
+    caps.swapChainDepthStencilFormats               = GetSupportedVKSwapChainDepthStencilFormats(physicalDevice_);
 
-    if (features.textureCompressionBC != VK_FALSE)
+    if (features_.textureCompressionBC != VK_FALSE)
     {
-        const std::vector<Format> compressedFormatsS3TC = GetCompressedVKTextureFormatsS3TC();
-        caps.textureFormats.insert(caps.textureFormats.end(), compressedFormatsS3TC.begin(), compressedFormatsS3TC.end());
+        const std::vector<Format> compressedFormatsBC = GetCompressedVKTextureFormatsBC();
+        caps.textureFormats.insert(caps.textureFormats.end(), compressedFormatsBC.begin(), compressedFormatsBC.end());
     }
 
-    if (features.textureCompressionASTC_LDR != VK_FALSE)
+    if (features_.textureCompressionASTC_LDR != VK_FALSE)
     {
         const std::vector<Format> compressedFormatsASTC = GetCompressedVKTextureFormatsASTC();
         caps.textureFormats.insert(caps.textureFormats.end(), compressedFormatsASTC.begin(), compressedFormatsASTC.end());
     }
 
-    if (features.textureCompressionETC2 != VK_FALSE)
+    if (features_.textureCompressionETC2 != VK_FALSE)
     {
         const std::vector<Format> compressedFormatsETC2 = GetCompressedVKTextureFormatsETC2();
         caps.textureFormats.insert(caps.textureFormats.end(), compressedFormatsETC2.begin(), compressedFormatsETC2.end());
@@ -287,7 +392,7 @@ void VKPhysicalDevice::QueryRenderingCaps(RenderingCapabilities& caps)
     caps.features.has3DTextures                     = true;
     caps.features.hasCubeTextures                   = true;
     caps.features.hasArrayTextures                  = true;
-    caps.features.hasCubeArrayTextures              = (features.imageCubeArray != VK_FALSE);
+    caps.features.hasCubeArrayTextures              = (features_.imageCubeArray != VK_FALSE);
     caps.features.hasMultiSampleTextures            = true;
     caps.features.hasMultiSampleArrayTextures       = true;
     caps.features.hasTextureViews                   = true;
@@ -296,20 +401,41 @@ void VKPhysicalDevice::QueryRenderingCaps(RenderingCapabilities& caps)
     caps.features.hasBufferViews                    = true;
     caps.features.hasConstantBuffers                = true;
     caps.features.hasStorageBuffers                 = true;
-    caps.features.hasGeometryShaders                = (features.geometryShader != VK_FALSE);
-    caps.features.hasTessellationShaders            = (features.tessellationShader != VK_FALSE);
+    caps.features.hasGeometryShaders                = (features_.geometryShader != VK_FALSE);
+    caps.features.hasTessellationShaders            = (features_.tessellationShader != VK_FALSE);
     caps.features.hasTessellatorStage               = caps.features.hasTessellationShaders;
     caps.features.hasComputeShaders                 = true;
+    #if VK_EXT_mesh_shader
+    caps.features.hasMeshShaders                    = SupportsExtension(VK_EXT_MESH_SHADER_EXTENSION_NAME);
+    #endif
     caps.features.hasInstancing                     = true;
     caps.features.hasOffsetInstancing               = true;
-    caps.features.hasIndirectDrawing                = (features.drawIndirectFirstInstance != VK_FALSE);
-    caps.features.hasViewportArrays                 = (features.multiViewport != VK_FALSE);
+    caps.features.hasIndirectDrawing                = (features_.drawIndirectFirstInstance != VK_FALSE);
+    caps.features.hasViewportArrays                 = (features_.multiViewport != VK_FALSE);
+    #if VK_KHR_multiview
+    caps.features.hasMultiview                      = (SupportsExtension(VK_KHR_MULTIVIEW_EXTENSION_NAME) && features_.multiview.multiview != VK_FALSE);
+    #endif
+    #if VK_KHR_depth_stencil_resolve && VK_KHR_create_renderpass2
+    // Core in Vulkan 1.2, but the OpenXR path creates a 1.1 device, so the extension is what decides here. It also
+    // needs create_renderpass2: the resolve is described by a struct chained into VkSubpassDescription2, which only
+    // the version-2 render pass entry points accept.
+    caps.features.hasDepthStencilResolve            = (SupportsExtension(VK_KHR_DEPTH_STENCIL_RESOLVE_EXTENSION_NAME) && SupportsExtension(VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME));
+    #endif
+    #if VK_EXT_conservative_rasterization
     caps.features.hasConservativeRasterization      = SupportsExtension(VK_EXT_CONSERVATIVE_RASTERIZATION_EXTENSION_NAME);
+    #endif
+    #if VK_EXT_transform_feedback
     caps.features.hasStreamOutputs                  = SupportsExtension(VK_EXT_TRANSFORM_FEEDBACK_EXTENSION_NAME);
-    caps.features.hasLogicOp                        = (features.logicOp != VK_FALSE);
-    caps.features.hasPipelineStatistics             = (features.pipelineStatisticsQuery != VK_FALSE);
-    caps.features.hasRenderCondition                = SupportsExtension(VK_EXT_CONDITIONAL_RENDERING_EXTENSION_NAME);
+    #endif
+    caps.features.hasLogicOp                        = (features_.logicOp != VK_FALSE);
     caps.features.hasPipelineCaching                = true;
+    caps.features.hasPipelineStatistics             = (features_.pipelineStatisticsQuery != VK_FALSE);
+    #if VK_EXT_conditional_rendering
+    caps.features.hasRenderCondition                = SupportsExtension(VK_EXT_CONDITIONAL_RENDERING_EXTENSION_NAME);
+    #endif
+    #if VK_KHR_fragment_shading_rate
+    caps.features.hasVariableRateShading            = SupportsExtension(VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME);
+    #endif
 
     /* Query limits */
     caps.limits.lineWidthRange[0]                   = limits.lineWidthRange[0];
@@ -331,9 +457,15 @@ void VKPhysicalDevice::QueryRenderingCaps(RenderingCapabilities& caps)
     caps.limits.maxViewports                        = std::min(limits.maxViewports, LLGL_MAX_NUM_VIEWPORTS_AND_SCISSORS);
     caps.limits.maxViewportSize[0]                  = limits.maxViewportDimensions[0];
     caps.limits.maxViewportSize[1]                  = limits.maxViewportDimensions[1];
+    #if VK_KHR_multiview
+    caps.limits.maxViews                            = (caps.features.hasMultiview ? properties_.multiview.maxMultiviewViewCount : 1u);
+    #endif
     caps.limits.maxBufferSize                       = std::numeric_limits<VkDeviceSize>::max();
     caps.limits.maxConstantBufferSize               = limits.maxUniformBufferRange;
-    caps.limits.maxStreamOutputs                    = transformFeedbackProps_.maxTransformFeedbackBuffers;
+    caps.limits.maxVertexBufferInputs               = limits.maxVertexInputBindings;
+    #if VK_EXT_transform_feedback
+    caps.limits.maxStreamOutputs                    = properties_.transformFeedback.maxTransformFeedbackBuffers;
+    #endif
     caps.limits.maxTessFactor                       = limits.maxTessellationGenerationLevel;
     caps.limits.minConstantBufferAlignment          = limits.minUniformBufferOffsetAlignment;
     caps.limits.minSampledBufferAlignment           = limits.minStorageBufferOffsetAlignment; // Use SSBO for both sampled and storage buffers
@@ -345,15 +477,23 @@ void VKPhysicalDevice::QueryRenderingCaps(RenderingCapabilities& caps)
     caps.limits.storageResourceStageFlags           = StageFlags::AllStages;
 }
 
-void VKPhysicalDevice::QueryPipelineLimits(VKGraphicsPipelineLimits& pipelineLimits)
+void VKPhysicalDevice::QueryPipelineLimits(VKGraphicsPipelineLimits& outPipelineLimits)
 {
-    /* Map limits to output rendering capabilites */
+    /* Map limits to output rendering capabilities */
     const VkPhysicalDeviceLimits& limits = properties_.limits;
 
-    /* Store graphics pipeline spcific limitations */
-    pipelineLimits.lineWidthRange[0]    = limits.lineWidthRange[0];
-    pipelineLimits.lineWidthRange[1]    = limits.lineWidthRange[1];
-    pipelineLimits.lineWidthGranularity = limits.lineWidthGranularity;
+    /* Store graphics pipeline specific limitations */
+    outPipelineLimits.lineWidthRange[0]         = limits.lineWidthRange[0];
+    outPipelineLimits.lineWidthRange[1]         = limits.lineWidthRange[1];
+    outPipelineLimits.lineWidthGranularity      = limits.lineWidthGranularity;
+
+    /* Store additional meta-data */
+    #if VK_KHR_fragment_shading_rate
+    outPipelineLimits.hasFragmentShadingRate    = SupportsExtension(VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME);
+    #else
+    outPipelineLimits.hasFragmentShadingRate    = false;
+    #endif
+
 
     /*
     TODO: extension limits
@@ -368,7 +508,7 @@ VKDevice VKPhysicalDevice::CreateLogicalDevice(VkDevice customLogicalDevice)
     if (customLogicalDevice != VK_NULL_HANDLE)
         device.LoadLogicalDeviceWeakRef(physicalDevice_, customLogicalDevice);
     else
-        device.CreateLogicalDevice(physicalDevice_, &features_, GetExtensionNames());
+        device.CreateLogicalDevice(physicalDevice_, &features2_, GetExtensionNames());
     return device;
 }
 
@@ -395,17 +535,38 @@ bool VKPhysicalDevice::SupportsExtension(const char* extension) const
  * ======= Private: =======
  */
 
+bool VKPhysicalDevice::EnableExtension(const char* name)
+{
+    auto it = supportedExtensionNames_.find(name);
+    if (it == supportedExtensionNames_.end())
+        return false;
+
+    /* Add name to enabled Vulkan extensions; use the stored name so we don't depend on the lifetime of the input string */
+    if (std::find(enabledExtensionNames_.begin(), enabledExtensionNames_.end(), *it) == enabledExtensionNames_.end())
+        enabledExtensionNames_.push_back(*it);
+
+    return true;
+}
+
 bool VKPhysicalDevice::EnableExtensions(const char** extensions, bool required)
 {
     for (; *extensions != nullptr; ++extensions)
     {
-        const char* name = *extensions;
-        if (supportedExtensionNames_.find(name) != supportedExtensionNames_.end())
+        if (!EnableExtension(*extensions) && required)
         {
-            /* Add name to enabled Vulkan extensions */
-            enabledExtensionNames_.push_back(name);
+            /* Cancel search and return with error */
+            enabledExtensionNames_.clear();
+            return false;
         }
-        else if (required)
+    }
+    return true;
+}
+
+bool VKPhysicalDevice::EnableExtensions(const ArrayView<const char*>& extensions, bool required)
+{
+    for (const char* name : extensions)
+    {
+        if (!EnableExtension(name) && required)
         {
             /* Cancel search and return with error */
             enabledExtensionNames_.clear();
@@ -429,7 +590,11 @@ struct VKBaseStructureInfo
     void*           pNext;
 };
 
-void VKPhysicalDevice::QueryDeviceFeatures()
+void VKQueryPhysicalDeviceFeatures(
+    VkPhysicalDevice                            physicalDevice,
+    const std::function<bool(const char*)>&     isExtensionEnabled,
+    VkPhysicalDeviceFeatures2&                  outFeatures2,
+    VKPhysicalDeviceFeaturesExt&                outFeaturesExt)
 {
     #if VK_KHR_get_physical_device_properties2
 
@@ -448,31 +613,62 @@ void VKPhysicalDevice::QueryDeviceFeatures()
         currentDesc = baseDescPtr;
     };
 
-    features_.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-    currentDesc = reinterpret_cast<VKBaseStructureInfo*>(&features_);
+    outFeatures2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    currentDesc = reinterpret_cast<VKBaseStructureInfo*>(&outFeatures2);
 
     #if VK_EXT_nested_command_buffer
-    if (SupportsExtension(VK_EXT_NESTED_COMMAND_BUFFER_EXTENSION_NAME))
-        AppendFeaturesDesc(&nestedCmdBufferFeatures_, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_NESTED_COMMAND_BUFFER_FEATURES_EXT);
+    if (isExtensionEnabled(VK_EXT_NESTED_COMMAND_BUFFER_EXTENSION_NAME))
+        AppendFeaturesDesc(&(outFeaturesExt.nestedCmdBuffer), VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_NESTED_COMMAND_BUFFER_FEATURES_EXT);
     #endif
 
     #if VK_EXT_transform_feedback
-    if (SupportsExtension(VK_EXT_TRANSFORM_FEEDBACK_EXTENSION_NAME))
-        AppendFeaturesDesc(&transformFeedbackFeatures_, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TRANSFORM_FEEDBACK_FEATURES_EXT);
+    if (isExtensionEnabled(VK_EXT_TRANSFORM_FEEDBACK_EXTENSION_NAME))
+        AppendFeaturesDesc(&(outFeaturesExt.transformFeedback), VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TRANSFORM_FEEDBACK_FEATURES_EXT);
+    #endif
+
+    #if VK_KHR_fragment_shading_rate
+    if (isExtensionEnabled(VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME))
+        AppendFeaturesDesc(&(outFeaturesExt.fragmentShadingRate), VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_FEATURES_KHR);
+    #endif
+
+    #if VK_KHR_multiview
+    if (isExtensionEnabled(VK_KHR_MULTIVIEW_EXTENSION_NAME))
+        AppendFeaturesDesc(&(outFeaturesExt.multiview), VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTIVIEW_FEATURES_KHR);
+    #endif
+
+    #if VK_EXT_mesh_shader
+    if (isExtensionEnabled(VK_EXT_MESH_SHADER_EXTENSION_NAME))
+        AppendFeaturesDesc(&(outFeaturesExt.meshShader), VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT);
     #endif
 
     #if VK_KHR_imageless_framebuffer
-    if (SupportsExtension(VK_KHR_IMAGELESS_FRAMEBUFFER_EXTENSION_NAME))
-        AppendFeaturesDesc(&imagelessFramebufferFeatures_, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGELESS_FRAMEBUFFER_FEATURES_KHR);
+    if (isExtensionEnabled(VK_KHR_IMAGELESS_FRAMEBUFFER_EXTENSION_NAME))
+        AppendFeaturesDesc(&(outFeaturesExt.imagelessFramebuffer), VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGELESS_FRAMEBUFFER_FEATURES_KHR);
     #endif
 
-    vkGetPhysicalDeviceFeatures2(physicalDevice_, &features_);
+    vkGetPhysicalDeviceFeatures2(physicalDevice, &outFeatures2);
+    static_cast<VkPhysicalDeviceFeatures&>(outFeaturesExt) = outFeatures2.features;
 
     #else // VK_KHR_get_physical_device_properties2
 
-    vkGetPhysicalDeviceFeatures(physicalDevice_, &(features_.features));
+    /* Vulkan 1.0 fallback: core features only. Mirror them into outFeatures2 so callers can use the same
+       pNext-or-pEnabledFeatures convention; the empty pNext signals the 1.0 path. */
+    outFeatures2 = VkPhysicalDeviceFeatures2{};
+    outFeatures2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    vkGetPhysicalDeviceFeatures(physicalDevice, &outFeaturesExt);
+    outFeatures2.features = static_cast<const VkPhysicalDeviceFeatures&>(outFeaturesExt);
 
     #endif // /VK_KHR_get_physical_device_properties2
+}
+
+void VKPhysicalDevice::QueryDeviceFeatures()
+{
+    VKQueryPhysicalDeviceFeatures(
+        physicalDevice_,
+        [this](const char* name) { return SupportsExtension(name); },
+        features2_,
+        features_
+    );
 }
 
 void VKPhysicalDevice::QueryDeviceProperties()
@@ -500,19 +696,39 @@ void VKPhysicalDevice::QueryDeviceProperties()
 
     currentDesc = reinterpret_cast<VKBaseStructureInfo*>(&propertiesExt);
 
+    #if VK_EXT_nested_command_buffer
+    if (SupportsExtension(VK_EXT_NESTED_COMMAND_BUFFER_EXTENSION_NAME))
+        ChainDescriptor(&(properties_.nestedCmdBuffer), VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_NESTED_COMMAND_BUFFER_PROPERTIES_EXT);
+    #endif
+
+    #if VK_EXT_conservative_rasterization
     if (SupportsExtension(VK_EXT_CONSERVATIVE_RASTERIZATION_EXTENSION_NAME))
-        ChainDescriptor(&conservRasterProps_, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CONSERVATIVE_RASTERIZATION_PROPERTIES_EXT);
+        ChainDescriptor(&(properties_.conservRaster), VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CONSERVATIVE_RASTERIZATION_PROPERTIES_EXT);
+    #endif
 
     #if VK_EXT_transform_feedback
     if (SupportsExtension(VK_EXT_TRANSFORM_FEEDBACK_EXTENSION_NAME))
-        ChainDescriptor(&transformFeedbackProps_, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TRANSFORM_FEEDBACK_PROPERTIES_EXT);
+        ChainDescriptor(&(properties_.transformFeedback), VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TRANSFORM_FEEDBACK_PROPERTIES_EXT);
+    #endif
+
+    #if VK_KHR_fragment_shading_rate
+    if (SupportsExtension(VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME))
+        ChainDescriptor(&(properties_.fragmentShadingRate), VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_PROPERTIES_KHR);
+    #endif
+
+    #if VK_KHR_multiview
+    if (SupportsExtension(VK_KHR_MULTIVIEW_EXTENSION_NAME))
+        ChainDescriptor(&(properties_.multiview), VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTIVIEW_PROPERTIES_KHR);
+    #endif
+
+    #if VK_EXT_mesh_shader
+    if (SupportsExtension(VK_EXT_MESH_SHADER_EXTENSION_NAME))
+        ChainDescriptor(&(properties_.meshShader), VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_PROPERTIES_EXT);
     #endif
 
     /* Query device properties with extension "VK_KHR_get_physical_device_properties2" */
     vkGetPhysicalDeviceProperties2(physicalDevice_, &propertiesExt);
-
-    /* Store primary device properties */
-    properties_ = propertiesExt.properties;
+    static_cast<VkPhysicalDeviceProperties&>(properties_) = propertiesExt.properties;
 
     #else // VK_KHR_get_physical_device_properties2
 

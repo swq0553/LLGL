@@ -213,6 +213,20 @@ LLGL_STATIC_ASSERT_ENUM(StencilFace, FrontAndBack);
 LLGL_STATIC_ASSERT_ENUM(StencilFace, Front);
 LLGL_STATIC_ASSERT_ENUM(StencilFace, Back);
 
+LLGL_STATIC_ASSERT_ENUM(ShadingRate, Size1x1);
+LLGL_STATIC_ASSERT_ENUM(ShadingRate, Size1x2);
+LLGL_STATIC_ASSERT_ENUM(ShadingRate, Size2x1);
+LLGL_STATIC_ASSERT_ENUM(ShadingRate, Size2x2);
+LLGL_STATIC_ASSERT_ENUM(ShadingRate, Size2x4);
+LLGL_STATIC_ASSERT_ENUM(ShadingRate, Size4x2);
+LLGL_STATIC_ASSERT_ENUM(ShadingRate, Size4x4);
+
+LLGL_STATIC_ASSERT_ENUM(ShadingRateOp, Keep);
+LLGL_STATIC_ASSERT_ENUM(ShadingRateOp, Replace);
+LLGL_STATIC_ASSERT_ENUM(ShadingRateOp, Min);
+LLGL_STATIC_ASSERT_ENUM(ShadingRateOp, Max);
+LLGL_STATIC_ASSERT_ENUM(ShadingRateOp, Sum);
+
 LLGL_STATIC_ASSERT_ENUM(Format, Undefined);
 LLGL_STATIC_ASSERT_ENUM(Format, A8UNorm);
 LLGL_STATIC_ASSERT_ENUM(Format, R8UNorm);
@@ -279,6 +293,8 @@ LLGL_STATIC_ASSERT_ENUM(Format, RGB10A2UInt);
 LLGL_STATIC_ASSERT_ENUM(Format, RG11B10Float);
 LLGL_STATIC_ASSERT_ENUM(Format, RGB9E5Float);
 LLGL_STATIC_ASSERT_ENUM(Format, BGR5A1UNorm);
+LLGL_STATIC_ASSERT_ENUM(Format, B5G6R5UNorm);
+LLGL_STATIC_ASSERT_ENUM(Format, BGRA4UNorm);
 LLGL_STATIC_ASSERT_ENUM(Format, D16UNorm);
 LLGL_STATIC_ASSERT_ENUM(Format, D24UNormS8UInt);
 LLGL_STATIC_ASSERT_ENUM(Format, D32Float);
@@ -366,6 +382,7 @@ LLGL_STATIC_ASSERT_ENUM(SystemValue, SampleMask);
 LLGL_STATIC_ASSERT_ENUM(SystemValue, SampleID);
 LLGL_STATIC_ASSERT_ENUM(SystemValue, Stencil);
 LLGL_STATIC_ASSERT_ENUM(SystemValue, VertexID);
+LLGL_STATIC_ASSERT_ENUM(SystemValue, ViewIndex);
 LLGL_STATIC_ASSERT_ENUM(SystemValue, ViewportIndex);
 
 LLGL_STATIC_ASSERT_ENUM(TextureType, Texture1D);
@@ -580,7 +597,7 @@ LLGL_STATIC_ASSERT_ENUM(Key, BrowserForward);
 LLGL_STATIC_ASSERT_ENUM(Key, BrowserRefresh);
 LLGL_STATIC_ASSERT_ENUM(Key, BrowserStop);
 LLGL_STATIC_ASSERT_ENUM(Key, BrowserSearch);
-LLGL_STATIC_ASSERT_ENUM(Key, BrowserFavorits);
+LLGL_STATIC_ASSERT_ENUM(Key, BrowserFavorites);
 LLGL_STATIC_ASSERT_ENUM(Key, BrowserHome);
 LLGL_STATIC_ASSERT_ENUM(Key, VolumeMute);
 LLGL_STATIC_ASSERT_ENUM(Key, VolumeDown);
@@ -639,10 +656,16 @@ LLGL_STATIC_ASSERT_ENUM(ErrorType, InvalidState);
 LLGL_STATIC_ASSERT_ENUM(ErrorType, UnsupportedFeature);
 LLGL_STATIC_ASSERT_ENUM(ErrorType, UndefinedBehavior);
 
+LLGL_STATIC_ASSERT_ENUM(VersionStatus, Undefined);
+LLGL_STATIC_ASSERT_ENUM(VersionStatus, Alpha);
+LLGL_STATIC_ASSERT_ENUM(VersionStatus, Beta);
+LLGL_STATIC_ASSERT_ENUM(VersionStatus, Stable);
+
 LLGL_STATIC_ASSERT_ENUM(WarningType, ImproperArgument);
 LLGL_STATIC_ASSERT_ENUM(WarningType, ImproperState);
 LLGL_STATIC_ASSERT_ENUM(WarningType, PointlessOperation);
 LLGL_STATIC_ASSERT_ENUM(WarningType, VaryingBehavior);
+LLGL_STATIC_ASSERT_ENUM(WarningType, DeprecatedFeature);
 
 
 /* ----- Flags ----- */
@@ -817,6 +840,7 @@ LLGL_STATIC_ASSERT_OFFSET(RasterizerDescriptor, multiSampleEnabled);
 LLGL_STATIC_ASSERT_OFFSET(RasterizerDescriptor, antiAliasedLineEnabled);
 LLGL_STATIC_ASSERT_OFFSET(RasterizerDescriptor, conservativeRasterization);
 LLGL_STATIC_ASSERT_OFFSET(RasterizerDescriptor, lineWidth);
+LLGL_STATIC_ASSERT_OFFSET(RasterizerDescriptor, shadingRateEnabled);
 
 LLGL_STATIC_ASSERT_SIZE(BlendTargetDescriptor);
 LLGL_STATIC_ASSERT_OFFSET(BlendTargetDescriptor, blendEnabled);
@@ -867,6 +891,16 @@ LLGL_STATIC_ASSERT_OFFSET(FormatAttributes, components);
 LLGL_STATIC_ASSERT_OFFSET(FormatAttributes, format);
 LLGL_STATIC_ASSERT_OFFSET(FormatAttributes, dataType);
 LLGL_STATIC_ASSERT_OFFSET(FormatAttributes, flags);
+
+LLGL_STATIC_ASSERT_SIZE(BufferViewDescriptor);
+LLGL_STATIC_ASSERT_OFFSET(BufferViewDescriptor, format);
+LLGL_STATIC_ASSERT_OFFSET(BufferViewDescriptor, offset);
+LLGL_STATIC_ASSERT_OFFSET(BufferViewDescriptor, size);
+
+LLGL_STATIC_ASSERT_SIZE(VertexBufferView);
+LLGL_STATIC_ASSERT_OFFSET(VertexBufferView, buffer);
+LLGL_STATIC_ASSERT_OFFSET(VertexBufferView, stride);
+LLGL_STATIC_ASSERT_OFFSET(VertexBufferView, offset);
 
 LLGL_STATIC_ASSERT_SIZE(TextureSwizzleRGBA);
 //LLGL_STATIC_ASSERT_OFFSET(TextureSwizzleRGBA, r);
@@ -920,6 +954,8 @@ LLGL_STATIC_ASSERT_OFFSET(SubresourceFootprint, layerStride);
 LLGL_STATIC_ASSERT_SIZE(SwapChainDescriptor);
 LLGL_STATIC_ASSERT_OFFSET(SwapChainDescriptor, debugName);
 LLGL_STATIC_ASSERT_OFFSET(SwapChainDescriptor, resolution);
+LLGL_STATIC_ASSERT_OFFSET(SwapChainDescriptor, colorFormat);
+LLGL_STATIC_ASSERT_OFFSET(SwapChainDescriptor, depthStencilFormat);
 LLGL_STATIC_ASSERT_OFFSET(SwapChainDescriptor, colorBits);
 LLGL_STATIC_ASSERT_OFFSET(SwapChainDescriptor, depthBits);
 LLGL_STATIC_ASSERT_OFFSET(SwapChainDescriptor, stencilBits);
@@ -949,6 +985,7 @@ LLGL_STATIC_ASSERT_OFFSET(RenderingFeatures, hasInstancing);
 LLGL_STATIC_ASSERT_OFFSET(RenderingFeatures, hasOffsetInstancing);
 LLGL_STATIC_ASSERT_OFFSET(RenderingFeatures, hasIndirectDrawing);
 LLGL_STATIC_ASSERT_OFFSET(RenderingFeatures, hasViewportArrays);
+LLGL_STATIC_ASSERT_OFFSET(RenderingFeatures, hasMultiview);
 LLGL_STATIC_ASSERT_OFFSET(RenderingFeatures, hasConservativeRasterization);
 LLGL_STATIC_ASSERT_OFFSET(RenderingFeatures, hasStreamOutputs);
 LLGL_STATIC_ASSERT_OFFSET(RenderingFeatures, hasLogicOp);
@@ -970,8 +1007,10 @@ LLGL_STATIC_ASSERT_OFFSET(RenderingLimits, maxComputeShaderWorkGroups);
 LLGL_STATIC_ASSERT_OFFSET(RenderingLimits, maxComputeShaderWorkGroupSize);
 LLGL_STATIC_ASSERT_OFFSET(RenderingLimits, maxViewports);
 LLGL_STATIC_ASSERT_OFFSET(RenderingLimits, maxViewportSize);
+LLGL_STATIC_ASSERT_OFFSET(RenderingLimits, maxViews);
 LLGL_STATIC_ASSERT_OFFSET(RenderingLimits, maxBufferSize);
 LLGL_STATIC_ASSERT_OFFSET(RenderingLimits, maxConstantBufferSize);
+LLGL_STATIC_ASSERT_OFFSET(RenderingLimits, maxVertexBufferInputs);
 LLGL_STATIC_ASSERT_OFFSET(RenderingLimits, maxStreamOutputs);
 LLGL_STATIC_ASSERT_OFFSET(RenderingLimits, maxTessFactor);
 LLGL_STATIC_ASSERT_OFFSET(RenderingLimits, minConstantBufferAlignment);
@@ -1043,9 +1082,11 @@ LLGL_STATIC_ASSERT_OFFSET(RenderTargetDescriptor, debugName);
 LLGL_STATIC_ASSERT_OFFSET(RenderTargetDescriptor, renderPass);
 LLGL_STATIC_ASSERT_OFFSET(RenderTargetDescriptor, resolution);
 LLGL_STATIC_ASSERT_OFFSET(RenderTargetDescriptor, samples);
+LLGL_STATIC_ASSERT_OFFSET(RenderTargetDescriptor, views);
 LLGL_STATIC_ASSERT_OFFSET(RenderTargetDescriptor, colorAttachments);
 LLGL_STATIC_ASSERT_OFFSET(RenderTargetDescriptor, resolveAttachments);
 LLGL_STATIC_ASSERT_OFFSET(RenderTargetDescriptor, depthStencilAttachment);
+LLGL_STATIC_ASSERT_OFFSET(RenderTargetDescriptor, depthStencilResolveAttachment);
 
 LLGL_STATIC_ASSERT_SIZE(BindingSlot);
 LLGL_STATIC_ASSERT_OFFSET(BindingSlot, index);
@@ -1081,6 +1122,7 @@ LLGL_STATIC_ASSERT_OFFSET(RenderPassDescriptor, colorAttachments);
 LLGL_STATIC_ASSERT_OFFSET(RenderPassDescriptor, depthAttachment);
 LLGL_STATIC_ASSERT_OFFSET(RenderPassDescriptor, stencilAttachment);
 LLGL_STATIC_ASSERT_OFFSET(RenderPassDescriptor, samples);
+LLGL_STATIC_ASSERT_OFFSET(RenderPassDescriptor, views);
 
 LLGL_STATIC_ASSERT_SIZE(DisplayMode);
 LLGL_STATIC_ASSERT_OFFSET(DisplayMode, resolution);
@@ -1114,7 +1156,7 @@ LLGL_STATIC_ASSERT_OFFSET(ProfileCommandQueueRecord, bufferReads);
 LLGL_STATIC_ASSERT_OFFSET(ProfileCommandQueueRecord, bufferMappings);
 LLGL_STATIC_ASSERT_OFFSET(ProfileCommandQueueRecord, textureWrites);
 LLGL_STATIC_ASSERT_OFFSET(ProfileCommandQueueRecord, textureReads);
-LLGL_STATIC_ASSERT_OFFSET(ProfileCommandQueueRecord, commandBufferSubmittions);
+LLGL_STATIC_ASSERT_OFFSET(ProfileCommandQueueRecord, commandBufferSubmissions);
 LLGL_STATIC_ASSERT_OFFSET(ProfileCommandQueueRecord, fenceSubmissions);
 
 LLGL_STATIC_ASSERT_SIZE(ProfileCommandBufferRecord);

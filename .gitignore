@@ -8,6 +8,7 @@ build*/
 *.aps
 *.cache
 *.spvasm
+*.pdb
 
 # Runtime output files for testing
 Screenshot.*
@@ -24,8 +25,17 @@ tests/Output
 *.dll
 *.dll.a
 
+# Intermediate configuration files for Go wrapper
+LLGL.pc
+
 # RenderDoc .cap capture files
 *.cap
 
 # VS Code folder
 .vscode
+
+sources/Platform/Linux/Wayland/protocols/
+
+# Claude Code files
+*.claude
+CLAUDE.md

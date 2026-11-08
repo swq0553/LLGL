@@ -13,8 +13,9 @@
 #include <LLGL/Container/SmallVector.h>
 #include "../D3D12Resource.h"
 #include "../RenderState/D3D12RenderPass.h"
-#include <d3d12.h>
 #include "../../DXCommon/ComPtr.h"
+#include <d3d12.h>
+#include <vector>
 
 
 namespace LLGL
@@ -58,12 +59,13 @@ class D3D12RenderTarget final : public RenderTarget
 
         UINT GatherAttachmentFormats(D3D12Device& device, const RenderTargetDescriptor& desc, ColorFormatVector& outColorFormats);
 
-        void CreateDescriptorHeaps(ID3D12Device* device, const UINT numColorTargets);
+        void CreateDescriptorHeaps(ID3D12Device* device, UINT numColorTargets);
 
         void CreateAttachments(
             ID3D12Device*                   device,
             const RenderTargetDescriptor&   desc,
-            const ColorFormatVector&        colorFormats
+            const ColorFormatVector&        colorFormats,
+            UINT                            numViews
         );
 
         void CreateColorAttachment(
@@ -71,14 +73,16 @@ class D3D12RenderTarget final : public RenderTarget
             const AttachmentDescriptor&     colorAttachment,
             const AttachmentDescriptor&     resolveAttachment,
             DXGI_FORMAT                     format,
-            D3D12_CPU_DESCRIPTOR_HANDLE     cpuDescHandle
+            D3D12_CPU_DESCRIPTOR_HANDLE     cpuDescHandle,
+            UINT                            numArrayLayers          = 1
         );
 
         void CreateDepthStencilAttachment(
             ID3D12Device*                   device,
             const AttachmentDescriptor&     depthStenciAttachment,
             D3D12_CPU_DESCRIPTOR_HANDLE     cpuDescHandle,
-            D3D12_DSV_FLAGS                 dsvFlags                = D3D12_DSV_FLAG_NONE
+            D3D12_DSV_FLAGS                 dsvFlags                = D3D12_DSV_FLAG_NONE,
+            UINT                            numArrayLayers          = 1
         );
 
         D3D12Resource* CreateInternalTexture(
@@ -96,7 +100,8 @@ class D3D12RenderTarget final : public RenderTarget
             const TextureType           type,
             UINT                        mipLevel,
             UINT                        arrayLayer,
-            D3D12_CPU_DESCRIPTOR_HANDLE cpuDescHandle
+            D3D12_CPU_DESCRIPTOR_HANDLE cpuDescHandle,
+            UINT                        numArrayLayers  = 1
         );
 
         void CreateDepthStencilView(
@@ -106,13 +111,19 @@ class D3D12RenderTarget final : public RenderTarget
             const TextureType   type,
             UINT                mipLevel,
             UINT                arrayLayer,
-            D3D12_DSV_FLAGS     dsvFlags    = D3D12_DSV_FLAG_NONE
+            D3D12_DSV_FLAGS     dsvFlags        = D3D12_DSV_FLAG_NONE,
+            UINT                numArrayLayers  = 1
         );
 
         void CreateResolveTarget(
             const AttachmentDescriptor& resolveAttachment,
             DXGI_FORMAT                 format,
             D3D12Resource*              multiSampledSrcTexture
+        );
+
+        void CreateDepthStencilResolveTarget(
+            const AttachmentDescriptor& depthStencilAttachment,
+            const AttachmentDescriptor& resolveAttachment
         );
 
     private:
@@ -124,6 +135,15 @@ class D3D12RenderTarget final : public RenderTarget
             UINT            resolveDstSubresource;
             D3D12Resource*  multiSampledSrcTexture;
             DXGI_FORMAT     format;
+        };
+
+        // Only the depth plane is resolved, since NVIDIA drivers leave the stencil plane untouched
+        struct DepthStencilResolveTarget
+        {
+            D3D12Resource*  resolveDstTexture           = nullptr;
+            UINT            resolveDstSubresource       = 0;
+            UINT            multiSampledSrcSubresource  = 0;
+            DXGI_FORMAT     format                      = DXGI_FORMAT_UNKNOWN;
         };
 
     private:
@@ -141,6 +161,7 @@ class D3D12RenderTarget final : public RenderTarget
         std::vector<D3D12Resource>      internalTextures_;
         std::vector<D3D12Resource*>     colorBuffers_;
         std::vector<ResolveTarget>      resolveTargets_;
+        DepthStencilResolveTarget       depthStencilResolveTarget_;
         D3D12Resource*                  depthStencil_       = nullptr;
 
 };

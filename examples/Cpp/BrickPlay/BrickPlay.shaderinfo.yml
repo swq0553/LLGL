@@ -1,0 +1,134 @@
+sources:
+  - source: "BrickPlay.hlsl"
+    entries:
+      - entry: "VSBrick"
+        profile: "vs_4_0"
+        targets: [spirv, metal]
+      - entry: "PSBrick"
+        profile: "ps_4_0"
+        targets: [spirv, metal]
+      - entry: "VSBrickPreview"
+        profile: "vs_4_0"
+        targets: [spirv, metal]
+      - entry: "PSBrickPreview"
+        profile: "ps_4_0"
+        targets: [spirv, metal]
+      - entry: "VSTransparentComposite"
+        profile: "vs_4_0"
+        targets: [spirv, metal]
+      - entry: "PSTransparentComposite"
+        profile: "ps_4_0"
+        targets: [spirv, metal]
+      - entry: "VSOverlay"
+        profile: "vs_4_0"
+        targets: [spirv, metal]
+      - entry: "PSOverlay"
+        profile: "ps_4_0"
+        targets: [spirv, metal]
+      - entry: "VSPlane"
+        profile: "vs_4_0"
+        targets: [spirv, metal]
+      - entry: "PSPlane"
+        profile: "ps_4_0"
+        targets: [spirv, metal]
+      - entry: "VSSkybox"
+        profile: "vs_4_0"
+        targets: [spirv, metal]
+      - entry: "PSSkybox"
+        profile: "ps_4_0"
+        targets: [spirv, metal]
+
+        # Only translate outline shaders for Desktop OpenGL and Vulkan, where line width rendering is supported.
+        # Other backends need to fallback to simplified highlighted rendering.
+      - entry: "VSBrickOutline"
+        profile: "vs_4_0"
+        targets: [spirv]
+      - entry: "PSBrickOutline"
+        profile: "ps_4_0"
+        targets: [spirv]
+
+  - source: "BrickPlay.hlsl"
+    permutation:
+      macros:
+        ENABLE_DUAL_SIDED_LIGHTING: 1
+    entries:
+      - entry: "PSBrickTransparent"
+        profile: "ps_4_0"
+        targets: [spirv, metal]
+      - entry: "PSBrickPreviewTransparent"
+        profile: "ps_4_0"
+        targets: [spirv, metal]
+
+  - source: "BrickPlay.hlsl"
+    permutation:
+      macros:
+        COMPILE_FOR_GL: 1
+    entries:
+      - entry: "VSBrick"
+        profile: "vs_4_0"
+        targets: [glsl140core, glsl300es]
+      - entry: "PSBrick"
+        profile: "ps_4_0"
+        targets: [glsl140core, glsl300es]
+      - entry: "VSBrickPreview"
+        profile: "vs_4_0"
+        targets: [glsl140core, glsl300es]
+      - entry: "PSBrickPreview"
+        profile: "ps_4_0"
+        targets: [glsl140core, glsl300es]
+      - entry: "VSTransparentComposite"
+        profile: "vs_4_0"
+        targets: [glsl140core, glsl300es]
+      - entry: "PSTransparentComposite"
+        profile: "ps_4_0"
+        targets: [glsl140core, glsl300es]
+      - entry: "VSOverlay"
+        profile: "vs_4_0"
+        targets: [glsl140core, glsl300es]
+      - entry: "PSOverlay"
+        profile: "ps_4_0"
+        targets: [glsl140core, glsl300es]
+      - entry: "VSPlane"
+        profile: "vs_4_0"
+        targets: [glsl140core, glsl300es]
+      - entry: "PSPlane"
+        profile: "ps_4_0"
+        targets: [glsl140core]
+      - entry: "VSSkybox"
+        profile: "vs_4_0"
+        targets: [glsl140core, glsl300es]
+      - entry: "PSSkybox"
+        profile: "ps_4_0"
+        targets: [glsl140core, glsl300es]
+
+        # Only translate outline shaders for Desktop OpenGL and Vulkan, where line width rendering is supported.
+        # Other backends need to fallback to simplified highlighted rendering.
+      - entry: "VSBrickOutline"
+        profile: "vs_4_0"
+        targets: [glsl140core]
+      - entry: "PSBrickOutline"
+        profile: "ps_4_0"
+        targets: [glsl140core]
+
+  - source: "BrickPlay.hlsl"
+    permutation:
+      macros:
+        COMPILE_FOR_GL: 1
+        MAX_NUM_PARALLAX_LAYERS: 6
+    entries:
+      - entry: "PSPlane"
+        profile: "ps_4_0"
+        targets: [glsl300es]
+
+  - source: "BrickPlay.hlsl"
+    permutation:
+      macros:
+        COMPILE_FOR_GL: 1
+        ENABLE_DUAL_SIDED_LIGHTING: 1
+    entries:
+      - entry: "PSBrickTransparent"
+        profile: "ps_4_0"
+        targets: [glsl140core, glsl300es]
+      - entry: "PSBrickPreviewTransparent"
+        profile: "ps_4_0"
+        targets: [glsl140core, glsl300es]

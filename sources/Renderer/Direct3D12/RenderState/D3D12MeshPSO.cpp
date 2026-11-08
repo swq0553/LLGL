@@ -20,9 +20,8 @@
 #include "../../PipelineStateUtils.h"
 #include "../../../Core/CoreUtils.h"
 #include "../../../Core/Assertion.h"
-#include "../../../Core/ByteBufferIterator.h"
 #include <LLGL/PipelineStateFlags.h>
-
+#include "D3D12PSOUtils.h"
 
 namespace LLGL
 {
@@ -39,6 +38,7 @@ D3D12MeshPSO::D3D12MeshPSO(
     {
         D3D12PipelineType::Mesh,
         desc.stencil,
+        desc.rasterizer,
         desc.blend,
         desc.rasterizer.scissorTestEnabled,
         desc.viewports,
@@ -89,43 +89,9 @@ void D3D12MeshPSO::Bind(D3D12CommandContext& commandContext)
     commandContext.SetPipelineState(GetNative());
 
     /* Set dynamic pipeline states */
-    BindOutputMergerAndStaticStates(commandContext.GetCommandList());
+    BindOutputMergerAndStaticStates(commandContext);
 }
 
-template <D3D12_PIPELINE_STATE_SUBOBJECT_TYPE TType, typename TObject>
-struct alignas(void*) D3DPipelineStreamSubobject
-{
-    D3D12_PIPELINE_STATE_SUBOBJECT_TYPE type    = { TType };
-    TObject                             object  = {};
-
-    D3DPipelineStreamSubobject() = default;
-
-    inline D3DPipelineStreamSubobject(TObject object) :
-        object { std::move(object) }
-    {
-    }
-
-    inline D3DPipelineStreamSubobject& operator = (TObject object)
-    {
-        this->object = std::move(object);
-        return *this;
-    }
-
-    inline operator TObject& ()
-    {
-        return object;
-    }
-
-    inline TObject& operator * ()
-    {
-        return object;
-    }
-
-    inline TObject* operator -> ()
-    {
-        return &object;
-    }
-};
 
 struct D3DMeshPipelineStream
 {
@@ -159,9 +125,9 @@ void D3D12MeshPSO::CreateNativePSO(
     stateDesc.rootSignature = GetRootSignature();
 
     /* Get shader byte codes */
-    stateDesc.amplificationShader = GetD3DShaderByteCode(desc.amplificationShader);
-    stateDesc.meshShader = GetD3DShaderByteCode(desc.meshShader);
-    stateDesc.pixelShader = GetD3DShaderByteCode(desc.fragmentShader);
+    stateDesc.amplificationShader   = GetD3DShaderByteCode(desc.taskShader);
+    stateDesc.meshShader            = GetD3DShaderByteCode(desc.meshShader);
+    stateDesc.pixelShader           = GetD3DShaderByteCode(desc.fragmentShader);
 
     /* Convert blend state and depth-stencil format */
     if (renderPass != nullptr)

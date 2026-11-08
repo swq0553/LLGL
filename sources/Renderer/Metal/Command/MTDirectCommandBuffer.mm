@@ -17,7 +17,6 @@
 #include "../RenderState/MTComputePSO.h"
 #include "../RenderState/MTQueryHeap.h"
 #include "../RenderState/MTResourceHeap.h"
-#include "../RenderState/MTBuiltinPSOFactory.h"
 #include "../RenderState/MTDescriptorCache.h"
 #include "../RenderState/MTConstantsCache.h"
 #include "../Shader/MTShader.h"
@@ -39,18 +38,19 @@ namespace LLGL
 {
 
 
-/*
-Minimum size for the "FillBuffer" command to use a GPU kernel.
-for smaller buffers an emulated CPU copy operation will be used.
-*/
-static const NSUInteger g_minFillBufferForKernel = 64;
-
 MTDirectCommandBuffer::MTDirectCommandBuffer(id<MTLDevice> device, MTCommandQueue& cmdQueue, const CommandBufferDescriptor& desc) :
     MTCommandBuffer    { device, desc.flags },
     cmdQueue_          { cmdQueue           },
     context_           { device             }
 {
     cmdBufferSemaphore_ = dispatch_semaphore_create(MTCommandBuffer::maxNumCommandBuffersInFlight);
+}
+
+MTDirectCommandBuffer::~MTDirectCommandBuffer()
+{
+    for (id<MTLDrawable> d : drawables_)
+        [d release];
+    [cmdBuffer_ release];
 }
 
 /* ----- Encoding ----- */
@@ -67,17 +67,21 @@ void MTDirectCommandBuffer::Begin()
         cmdBufferDirty_ = true;
     }
 
-    /* Allocate new command buffer from command queue */
-    cmdBuffer_ = [cmdQueue_.GetNative() commandBuffer];
+    /* Allocate new command buffer from command queue; hold our own reference so we don't rely on the client's autorelease pool */
+    @autoreleasepool
+    {
+        [cmdBuffer_ release];
+        cmdBuffer_ = [[cmdQueue_.GetNative() commandBuffer] retain];
 
-    /* Append complete handler to signal semaphore */
-    __block dispatch_semaphore_t blockSemaphore = cmdBufferSemaphore_;
-    [cmdBuffer_
-        addCompletedHandler:^(id<MTLCommandBuffer> cmdBuffer)
-        {
-            dispatch_semaphore_signal(blockSemaphore);
-        }
-    ];
+        /* Append complete handler to signal semaphore */
+        __block dispatch_semaphore_t blockSemaphore = cmdBufferSemaphore_;
+        [cmdBuffer_
+            addCompletedHandler:^(id<MTLCommandBuffer> cmdBuffer)
+            {
+                dispatch_semaphore_signal(blockSemaphore);
+            }
+        ];
+    }
 
     /* Reset schedulers and pools */
     context_.Reset(cmdBuffer_);
@@ -208,39 +212,11 @@ void MTDirectCommandBuffer::FillBuffer(
     std::uint32_t   value,
     std::uint64_t   fillSize)
 {
-    if (fillSize == 0)
-        return;
-
-    auto& dstBufferMT = LLGL_CAST(MTBuffer&, dstBuffer);
-
-    /* Check if native "fillBuffer" command can be used */
-    const bool valueBytesAreEqual =
-    (
-        ((value >> 24) & 0x000000FF) == (value & 0x000000FF) &&
-        ((value >> 16) & 0x000000FF) == (value & 0x000000FF) &&
-        ((value >>  8) & 0x000000FF) == (value & 0x000000FF)
-    );
-
-    /* Determine buffer range for fill command */
-    NSRange range;
-    if (fillSize == LLGL_WHOLE_SIZE)
+    if (fillSize > 0)
     {
-        NSUInteger bufferSize = [dstBufferMT.GetNative() length];
-        range = NSMakeRange(0, bufferSize);
+        auto& dstBufferMT = LLGL_CAST(MTBuffer&, dstBuffer);
+        context_.CmdFillBuffer(dstBufferMT, dstOffset, value, fillSize);
     }
-    else
-    {
-        range = NSMakeRange(
-            static_cast<NSUInteger>(dstOffset),
-            static_cast<NSUInteger>(fillSize)
-        );
-    }
-
-    /* Fill with native command if all four bytes are equal, otherwise use blit and comput commands */
-    if (valueBytesAreEqual)
-        FillBufferByte1(dstBufferMT, range, static_cast<std::uint8_t>(value & 0x000000FF));
-    else
-        FillBufferByte4(dstBufferMT, range, value);
 }
 
 void MTDirectCommandBuffer::CopyTexture(
@@ -426,21 +402,28 @@ void MTDirectCommandBuffer::SetScissors(std::uint32_t numScissors, const Scissor
 
 /* ----- Input Assembly ------ */
 
-//private
-void MTDirectCommandBuffer::SetVertexBufferInternal(Buffer& buffer)
+void MTDirectCommandBuffer::SetVertexBuffer(Buffer& buffer)
 {
     auto& bufferMT = LLGL_CAST(MTBuffer&, buffer);
     context_.SetVertexBuffer(bufferMT.GetNative(), 0);
 }
 
-void MTDirectCommandBuffer::SetVertexBuffer(Buffer& buffer)
+void MTDirectCommandBuffer::SetVertexBuffer(Buffer& buffer, std::uint32_t stride, std::uint64_t offset)
 {
-    SetVertexBufferInternal(buffer);
+    auto& bufferMT = LLGL_CAST(MTBuffer&, buffer);
+    context_.SetVertexBuffer(bufferMT.GetNative(), static_cast<NSUInteger>(offset));
 }
 
-void MTDirectCommandBuffer::SetVertexBuffer(Buffer& buffer, std::uint32_t /*numVertexAttribs*/, const VertexAttribute* /*vertexAttribs*/)
+void MTDirectCommandBuffer::SetVertexBuffers(std::uint32_t numBufferViews, const VertexBufferView* bufferViews)
 {
-    SetVertexBufferInternal(buffer);
+    if (numBufferViews == 0 || bufferViews == nullptr)
+        return;
+
+    id<MTLBuffer> buffers[MTCommandContext::maxNumVertexBuffers];
+    NSUInteger offsets[MTCommandContext::maxNumVertexBuffers];
+    TranslateVertexBufferViews(numBufferViews, bufferViews, buffers, offsets);
+
+    context_.SetVertexBuffers(buffers, offsets, static_cast<NSUInteger>(numBufferViews));
 }
 
 void MTDirectCommandBuffer::SetVertexBufferArray(BufferArray& bufferArray)
@@ -509,16 +492,20 @@ void MTDirectCommandBuffer::BeginRenderPass(
     const ClearValue*   clearValues,
     std::uint32_t       /*swapBufferIndex*/)
 {
-    if (LLGL::IsInstanceOf<SwapChain>(renderTarget))
+    /* MetalKit view returns autoreleased drawables and render pass descriptors */
+    @autoreleasepool
     {
-        /* Put current drawable into queue */
-        auto& swapChainMT = LLGL_CAST(MTSwapChain&, renderTarget);
-        QueueDrawable(swapChainMT.GetMTKView().currentDrawable);
-    }
+        if (LLGL::IsInstanceOf<SwapChain>(renderTarget))
+        {
+            /* Put current drawable into queue */
+            auto& swapChainMT = LLGL_CAST(MTSwapChain&, renderTarget);
+            QueueDrawable(swapChainMT.GetMTKView().currentDrawable);
+        }
 
-    /* Get next render pass descriptor from MetalKit view */
-    auto* renderPassMT = LLGL_CAST(const MTRenderPass*, renderPass);
-    context_.BeginRenderPass(&renderTarget, renderPassMT, numClearValues, clearValues);
+        /* Get next render pass descriptor from MetalKit view */
+        auto* renderPassMT = LLGL_CAST(const MTRenderPass*, renderPass);
+        context_.BeginRenderPass(&renderTarget, renderPassMT, numClearValues, clearValues);
+    }
 }
 
 void MTDirectCommandBuffer::EndRenderPass()
@@ -567,7 +554,7 @@ static void FillMTRenderPassDesc(MTLRenderPassDescriptor* renderPassDesc, const 
         renderPassDesc.colorAttachments[colorBufferIndex].loadAction = MTLLoadActionClear;
         renderPassDesc.colorAttachments[colorBufferIndex].clearColor = MTTypes::ToMTLClearColor(attachment.clearValue.color);
     }
-    
+
     if ((attachment.flags & ClearFlags::Depth) != 0)
     {
         /* Clear depth buffer */
@@ -1124,13 +1111,19 @@ void MTDirectCommandBuffer::QueueDrawable(id<MTLDrawable> drawable)
         if (d == drawable)
             return;
     }
-    drawables_.push_back(drawable);
+    drawables_.push_back([drawable retain]);
 }
 
 void MTDirectCommandBuffer::PresentDrawables()
 {
-    for (id<MTLDrawable> d : drawables_)
-        [cmdBuffer_ presentDrawable:d];
+    @autoreleasepool
+    {
+        for (id<MTLDrawable> d : drawables_)
+        {
+            [cmdBuffer_ presentDrawable:d];
+            [d release];
+        }
+    }
     drawables_.clear();
 }
 
@@ -1143,49 +1136,6 @@ id<MTLTexture> MTDirectCommandBuffer::GetCurrentDrawableTexture() const
             return [drawable texture];
     }
     return nil;
-}
-
-void MTDirectCommandBuffer::FillBufferByte1(MTBuffer& bufferMT, const NSRange& range, std::uint8_t value)
-{
-    auto blitEncoder = context_.BindBlitEncoder();
-    [blitEncoder fillBuffer:bufferMT.GetNative() range:range value:value];
-}
-
-void MTDirectCommandBuffer::FillBufferByte4(MTBuffer& bufferMT, const NSRange& range, std::uint32_t value)
-{
-    /* Use emulated fill command if buffer range is small enough to avoid having both a blit and compute encoder */
-    if (range.length > g_minFillBufferForKernel)
-        FillBufferByte4Accelerated(bufferMT, range, value);
-    else
-        FillBufferByte4Emulated(bufferMT, range, value);
-}
-
-void MTDirectCommandBuffer::FillBufferByte4Emulated(MTBuffer& bufferMT, const NSRange& range, std::uint32_t value)
-{
-    /* Copy value into stack local buffer */
-    std::uint32_t localBuffer[g_minFillBufferForKernel / sizeof(std::uint32_t)];
-    std::fill(std::begin(localBuffer), std::end(localBuffer), value);
-
-    /* Write clear value into first range of destination buffer */
-    UpdateBuffer(bufferMT, range.location, localBuffer, range.length);
-}
-
-//TODO: manage binding of compute PSO in MTCommandContext
-void MTDirectCommandBuffer::FillBufferByte4Accelerated(MTBuffer& bufferMT, const NSRange& range, std::uint32_t value)
-{
-    auto computeEncoder = context_.BindComputeEncoder();
-
-    /* Bind compute PSO with kernel to fill buffer */
-    id<MTLComputePipelineState> pso = MTBuiltinPSOFactory::Get().GetComputePSO(MTBuiltinComputePSO::FillBufferByte4);
-    [computeEncoder setComputePipelineState:pso];
-
-    /* Bind destination buffer range and store clear value as input constant buffer */
-    [computeEncoder setBuffer:bufferMT.GetNative() offset:range.location atIndex:0];
-    [computeEncoder setBytes:&value length:sizeof(value) atIndex:1];
-
-    /* Dispatch compute kernels */
-    const NSUInteger numValues = range.length / sizeof(std::uint32_t);
-    context_.DispatchThreads1D(computeEncoder, pso, numValues);
 }
 
 

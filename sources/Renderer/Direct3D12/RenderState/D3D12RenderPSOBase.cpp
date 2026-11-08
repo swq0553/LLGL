@@ -7,6 +7,7 @@
 
 #include "D3D12RenderPSOBase.h"
 #include "D3D12PipelineStateUtils.h"
+#include "../Command/D3D12CommandContext.h"
 #include "../../PipelineStateUtils.h"
 #include "../../../Core/ByteBufferIterator.h"
 #include <LLGL/Utils/ForRange.h>
@@ -21,6 +22,7 @@ D3D12RenderPSOBase::D3D12RenderPSOBase(
     D3D12PipelineType           type,
 
     const StencilDescriptor&    stencilDesc,
+    const RasterizerDescriptor& rasterizerDesc,
     const BlendDescriptor&      blendDesc,
     bool                        isScissorEnabled,
     const ArrayView<Viewport>&  staticViewports,
@@ -34,6 +36,7 @@ D3D12RenderPSOBase::D3D12RenderPSOBase(
 {
     /* Store dynamic pipeline states */
     scissorEnabled_     = (isScissorEnabled ? 1 : 0);
+    shadingRateEnabled_ = (rasterizerDesc.shadingRateEnabled ? 1 : 0);
 
     stencilRefEnabled_  = (IsStaticStencilRefEnabled(stencilDesc) ? 1 : 0);
     stencilRef_         = stencilDesc.front.reference;
@@ -49,60 +52,39 @@ D3D12RenderPSOBase::D3D12RenderPSOBase(
         BuildStaticStateBuffer(staticViewports, staticScissors);
 }
 
-void D3D12RenderPSOBase::BindOutputMergerAndStaticStates(ID3D12GraphicsCommandList* commandList)
+void D3D12RenderPSOBase::BindOutputMergerAndStaticStates(D3D12CommandContext& commandContext)
 {
+    ID3D12GraphicsCommandList* commandList = commandContext.GetCommandList();
+
     if (stencilRefEnabled_ != 0)
         commandList->OMSetStencilRef(stencilRef_);
     if (blendFactorEnabled_ != 0)
         commandList->OMSetBlendFactor(blendFactor_);
 
     SetStaticViewportsAndScissors(commandList);
+
+    #if LLGL_D3D12_ENABLE_FEATURELEVEL >= 1
+    /* Reset shading rate if PSO does not enable it */
+    if (!IsShadingRateEnabled())
+        commandContext.ResetShadingRate();
+    #endif
 }
 
 UINT D3D12RenderPSOBase::NumDefaultScissorRects() const
 {
-    return std::max(numStaticViewports_, 1u);
+    return std::max<UINT>(staticStateBuffer_.GetNumViewports(), 1u);
 }
 
-// Returns the size (in bytes) for the static-state buffer with the specified number of viewports and scissor rectangles
-static std::size_t GetStaticStateBufferSize(std::size_t numViewports, std::size_t numScissors)
+void D3D12RenderPSOBase::BuildStaticStateBuffer(const ArrayView<Viewport>& viewports, const ArrayView<Scissor>& scissors)
 {
-    return (numViewports * sizeof(D3D12_VIEWPORT) + numScissors * sizeof(D3D12_RECT));
-}
-
-void D3D12RenderPSOBase::BuildStaticStateBuffer(const ArrayView<Viewport>& staticViewports, const ArrayView<Scissor>& staticScissors)
-{
-    /* Allocate packed raw buffer */
-    const std::size_t bufferSize = GetStaticStateBufferSize(staticViewports.size(), staticScissors.size());
-    staticStateBuffer_ = DynamicByteArray{ bufferSize };
-
-    ByteBufferIterator byteBufferIter{ staticStateBuffer_.get() };
-
-    /* Build static viewports in raw buffer */
-    if (!staticViewports.empty())
-        BuildStaticViewports(staticViewports.size(), staticViewports.data(), byteBufferIter);
-
-    /* Build static scissors in raw buffer */
-    if (!staticScissors.empty())
-        BuildStaticScissors(staticScissors.size(), staticScissors.data(), byteBufferIter);
-}
-
-void D3D12RenderPSOBase::BuildStaticViewports(std::size_t numViewports, const Viewport* viewports, ByteBufferIterator& byteBufferIter)
-{
-    /* Store number of viewports and validate limit */
-    numStaticViewports_ = static_cast<UINT>(numViewports);
-
-    if (numStaticViewports_ > D3D12_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE)
-    {
-        GetMutableReport().Errorf(
-            "too many viewports in graphics pipeline state; %u specified, but limit is %d",
-            numStaticViewports_, D3D12_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE
-        );
-        return;
-    }
+    ByteBufferIterator byteBufferIter = staticStateBuffer_.Allocate(
+        viewports.size(), scissors.size(),
+        sizeof(D3D12_VIEWPORT), sizeof(D3D12_RECT),
+        GetMutableReport(), D3D12_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE
+    );
 
     /* Build <D3D12_VIEWPORT> entries */
-    for_range(i, numViewports)
+    for_range(i, staticStateBuffer_.GetNumViewports())
     {
         D3D12_VIEWPORT* dst = byteBufferIter.Next<D3D12_VIEWPORT>();
         {
@@ -114,24 +96,9 @@ void D3D12RenderPSOBase::BuildStaticViewports(std::size_t numViewports, const Vi
             dst->MaxDepth   = viewports[i].maxDepth;
         }
     }
-}
-
-void D3D12RenderPSOBase::BuildStaticScissors(std::size_t numScissors, const Scissor* scissors, ByteBufferIterator& byteBufferIter)
-{
-    /* Store number of scissors and validate limit */
-    numStaticScissors_ = static_cast<UINT>(numScissors);
-
-    if (numStaticScissors_ > D3D12_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE)
-    {
-        GetMutableReport().Errorf(
-            "too many scissors in graphics pipeline state; %u specified, but limit is %d",
-            numStaticScissors_, D3D12_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE
-        );
-        return;
-    }
 
     /* Build <D3D12_RECT> entries */
-    for_range(i, numScissors)
+    for_range(i, staticStateBuffer_.GetNumScissors())
     {
         D3D12_RECT* dst = byteBufferIter.Next<D3D12_RECT>();
         {
@@ -147,19 +114,19 @@ void D3D12RenderPSOBase::SetStaticViewportsAndScissors(ID3D12GraphicsCommandList
 {
     if (staticStateBuffer_)
     {
-        ByteBufferIterator byteBufferIter{ staticStateBuffer_.get() };
-        if (numStaticViewports_ > 0)
+        ByteBufferConstIterator byteBufferIter = staticStateBuffer_.GetBufferIterator();
+        if (staticStateBuffer_.GetNumViewports() > 0)
         {
             commandList->RSSetViewports(
-                numStaticViewports_,
-                byteBufferIter.Next<D3D12_VIEWPORT>(numStaticViewports_)
+                staticStateBuffer_.GetNumViewports(),
+                byteBufferIter.Next<D3D12_VIEWPORT>(staticStateBuffer_.GetNumViewports())
             );
         }
-        if (numStaticScissors_ > 0)
+        if (staticStateBuffer_.GetNumScissors() > 0)
         {
             commandList->RSSetScissorRects(
-                numStaticScissors_,
-                byteBufferIter.Next<D3D12_RECT>(numStaticScissors_)
+                staticStateBuffer_.GetNumScissors(),
+                byteBufferIter.Next<D3D12_RECT>(staticStateBuffer_.GetNumScissors())
             );
         }
     }

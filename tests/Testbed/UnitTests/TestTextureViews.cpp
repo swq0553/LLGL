@@ -49,6 +49,7 @@ DEF_TEST( TextureViews )
     {
         psoDesc.pipelineLayout                  = psoLayout;
         psoDesc.renderPass                      = swapChain->GetRenderPass();
+        psoDesc.inputVertexAttribs              = vertexFormats[VertFmtStd].attributes;
         psoDesc.vertexShader                    = shaders[VSTextured];
         psoDesc.fragmentShader                  = shaders[PSTextured];
         psoDesc.blend.targets[0].blendEnabled   = true;
@@ -112,7 +113,7 @@ DEF_TEST( TextureViews )
 
     Texture* readbackTex = nullptr;
 
-    cmdBuffer->Begin();
+    BEGIN();
     {
         cmdBuffer->SetVertexBuffer(*meshBuffer);
         cmdBuffer->SetIndexBuffer(*meshBuffer, Format::R32UInt, mesh.indexBufferOffset);
@@ -152,7 +153,7 @@ DEF_TEST( TextureViews )
         }
         cmdBuffer->EndRenderPass();
     }
-    cmdBuffer->End();
+    END();
 
     // Match entire color buffer and create delta heat map
     const char* colorBufferName = (isTextureFormatReinterpretationSupported ? "TextureViews" : "TextureViews_Limited");

@@ -21,6 +21,7 @@ class CommandBufferTier1;
 class CommandQueue;
 class Fence;
 class Image;
+class IncludeHandler;
 class PipelineLayout;
 class PipelineState;
 class QueryHeap;
@@ -36,6 +37,9 @@ class Surface;
 class SwapChain;
 class Texture;
 class Window;
+class XRSession;
+class XRSwapChain;
+class XRSystem;
 
 struct ApplicationDescriptor;
 struct AttachmentClear;
@@ -88,13 +92,20 @@ struct StencilDescriptor;
 struct StencilFaceDescriptor;
 struct SwapChainDescriptor;
 struct TextureDescriptor;
+struct TextureLocation;
 struct TextureRegion;
 struct TextureViewDescriptor;
 struct UniformDescriptor;
 struct VertexAttribute;
+struct VertexBufferView;
 struct VertexFormat;
 struct Viewport;
 struct WindowDescriptor;
+struct XRSessionDescriptor;
+struct XRSwapChainDescriptor;
+struct XRSystemDescriptor;
+struct XRViewConfigurationView;
+struct XRViewPose;
 
 
 } // /namespace LLGL

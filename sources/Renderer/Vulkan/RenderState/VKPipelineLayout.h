@@ -95,7 +95,7 @@ class VKPipelineLayout final : public PipelineLayout
             return setBindingTables_[SetLayoutType_ImmutableSamplers].dstSet;
         }
 
-        // Returns a Vulkan handle of the static descriptor. May also be VK_NULL_HANLDE.
+        // Returns a Vulkan handle of the static descriptor. May also be VK_NULL_HANDLE.
         inline VkDescriptorSet GetStaticDescriptorSet() const
         {
             return staticDescriptorSet_;
@@ -175,7 +175,8 @@ class VKPipelineLayout final : public PipelineLayout
             VkDevice                                device,
             const std::vector<BindingDescriptor>&   inBindings,
             std::vector<VKLayoutBinding>&           outBindings,
-            VKDescriptorSetLayout&                  outDescriptorSetLayout
+            VKDescriptorSetLayout&                  outDescriptorSetLayout,
+            VKSanitizeBindingSlotContext&           sanitizeContext
         );
 
         void AllocateDescriptorBarriers(std::vector<VKLayoutBinding>& bindings);

@@ -35,6 +35,9 @@ DEF_TEST( ResourceBinding )
     }
     #endif
 
+    if (!caps.features.hasComputeShaders)
+        return TestResult::Skipped;
+
     // This shader writes to a UAV in the vertex shader
     if ((caps.limits.storageResourceStageFlags & StageFlags::VertexStage) == 0)
         return TestResult::Skipped;
@@ -619,7 +622,7 @@ DEF_TEST( ResourceBinding )
             }
 
             // Render with graphics shaders
-            cmdBuf.SetVertexBuffer(*meshBuffer);
+            cmdBuf.SetVertexBuffer(*meshBuffer); // Dummy
 
             switch ((frame/2) % 3)
             {
@@ -649,6 +652,7 @@ DEF_TEST( ResourceBinding )
     // Encode dispatch and render commands to calculate values in buffer/texture
     ExpectedResults expectedResults = {};
     EncodeCommandBuffer(*cmdBuffer, expectedResults);
+    cmdQueue->Submit(*cmdBuffer);
 
     // Run this test many times in full test mode to ensure resource transitioning works, but only use a few iterations in fast mode
     const unsigned numFrames = (opt.fastTest ? 10 : 1000);
@@ -706,10 +710,14 @@ DEF_TEST( ResourceBinding )
     if (intermediateResult == TestResult::Passed)
     {
         if (opt.verbose)
-            Log::Printf("Binding test passed (Frame %u)\n", frame);
+            Log::Printf("Binding test [Frame %u] passed\n", frame);
     }
     else
+    {
+        if (opt.verbose)
+            Log::Errorf(Log::ColorFlags::StdWarning, "Binding test [Frame %u] failed\n", frame);
         result = intermediateResult;
+    }
 
     if (intermediateResult == TestResult::Passed || opt.greedy)
     {

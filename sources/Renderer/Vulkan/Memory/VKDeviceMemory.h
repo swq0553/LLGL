@@ -11,7 +11,7 @@
 
 #include "VKDeviceMemoryRegion.h"
 #include "../VKPtr.h"
-#include <vulkan/vulkan.h>
+#include "../Vulkan.h"
 #include <cstdint>
 #include <vector>
 #include <memory>
@@ -109,7 +109,7 @@ class VKDeviceMemory
         // Tries to find a fragmented block that can be reused.
         VKDeviceMemoryRegion* FindReusableBlock(VkDeviceSize alignedSize, VkDeviceSize alignment);
 
-        // Updates the maximal size of fragmanted blocks.
+        // Updates the maximal size of fragmented blocks.
         void UpdateMaxFragmentedBlockSize();
 
         // Inserts the specified region into the fragmented block list by insertion-sort.

@@ -110,6 +110,12 @@ class TestbedContext
         // Returns the aspect ratio of the main viewport.
         float GetAspectRatio() const;
 
+        // Loads a new texture from file.
+        LLGL::Texture* LoadTextureFromFile(const char* name, const std::string& filename, LLGL::Format format = LLGL::Format::RGBA8UNorm);
+
+        // Returns true if the specified shading language is supported by the current renderer.
+        bool IsShadingLanguageSupported(LLGL::ShadingLanguage language) const;
+
     protected:
 
         enum Models
@@ -126,6 +132,7 @@ class TestbedContext
             VertFmtColored,
             VertFmtColoredSO,
             VertFmtUnprojected,
+            VertFmtUnprojectedBGRA,
             VertFmtEmpty,
             VertFmtLayout0,
             VertFmtLayout1,
@@ -147,10 +154,14 @@ class TestbedContext
         enum Shaders
         {
             VSSolid = 0,
+            VSSolidInstanced,
             PSSolid,
 
             VSTextured,
             PSTextured,
+
+            VSTextured8,
+            PSTextured8,
 
             VSDynamic,
             PSDynamic,
@@ -160,6 +171,9 @@ class TestbedContext
 
             VSDualSourceBlend,
             PSDualSourceBlend,
+
+            VSAlphaOnlyTexture,
+            PSAlphaOnlyTexture,
 
             VSShadowMap,
             VSShadowedScene,
@@ -188,12 +202,12 @@ class TestbedContext
 
             CSSamplerBuffer,
 
+            CSByteBuffer,
+
             CSReadAfterWrite,
 
-            VSVertexFormat0,
-            VSVertexFormat1,
-            VSVertexFormat2,
-            VSVertexFormat3,
+            VSVertexFormatA,
+            VSVertexFormatB,
             PSVertexFormat,
 
             MSMeshlet,
@@ -244,6 +258,7 @@ class TestbedContext
             bool                        sanityCheck = false; // This is 'very verbose' and dumps out all intermediate data on successful tests
             bool                        showTiming  = false;
             bool                        fastTest    = false; // Skip slow buffer/texture creations to speed up test run
+            bool                        updateRefs  = false; // Generate new reference images, this outputs images with the `.Ref.png` suffix instead of `.Result.png`.
             LLGL::Extent2D              resolution;
             std::vector<std::string>    selectedTests;
 
@@ -350,6 +365,7 @@ class TestbedContext
     protected:
 
         const std::string               moduleName;
+        const std::string               textureDir;
         const Options                   opt;
         const LLGL::ClearValue          bgColorDarkBlue         = { 0.2f, 0.2f, 0.4f, 1.0f };
         const LLGL::ClearValue          bgColorLightBlue        = { 127.0f/255.0f, 127.0f/255.0f, 1.0f, 1.0f };
@@ -374,8 +390,13 @@ class TestbedContext
         LLGL::Texture*                  textures[TextureCount]  = {};
         LLGL::Sampler*                  samplers[SamplerCount]  = {};
         Gs::Matrix4f                    projection;
+        long                            renderSystemFlags       = 0;
 
     private:
+
+        #define LLGL_STANDALONE_UNIT_TEST(NAME)     static TestResult Test##NAME(const Options& opt)
+        #define LLGL_UNIT_TEST(NAME)                TestResult Test##NAME(unsigned frame)
+        #define LLGL_CUSTOM_PRESENT_UNIT_TEST(NAME) LLGL_UNIT_TEST(NAME)
 
         #include "UnitTests/DeclTests.inl"
 
@@ -387,18 +408,18 @@ class TestbedContext
 
         static double ToMillisecs(std::uint64_t t0, std::uint64_t t1);
 
-        static LLGL::Image LoadImageFromFile(const std::string& filename, bool verbose = false);
+        static LLGL::Image LoadImageFromFile(const std::string& filename, bool verbose = false, LLGL::ImageFormat format = LLGL::ImageFormat::RGB);
         static void SaveImageToFile(const LLGL::Image& img, const std::string& filename, bool verbose = false);
 
         static bool IsRGBA8ubInThreshold(const std::uint8_t lhs[4], const std::uint8_t rhs[4], int threshold = 1);
 
     private:
 
-        void LogRendererInfo();
+        void LogRendererInfo(bool isImmediateContext);
 
         bool LoadShaders();
         void CreatePipelineLayouts();
-        bool LoadTextures();
+        bool LoadDefaultTextures();
         void CreateSamplerStates();
         void LoadProjectionMatrix(Gs::Matrix4f& outProjection, float aspectRatio = 1.0f, float nearPlane = 0.1f, float farPlane = 100.0f, float fov = 45.0f);
         void LoadDefaultProjectionMatrix();
@@ -417,9 +438,7 @@ class TestbedContext
             LLGL::ShaderType            type,
             const char*                 entry       = nullptr,
             const char*                 profile     = nullptr,
-            const LLGL::ShaderMacro*    defines     = nullptr,
-            VertFmt                     vertFmt     = VertFmtStd,
-            VertFmt                     vertOutFmt  = VertFmtCount
+            const LLGL::ShaderMacro*    defines     = nullptr
         );
 
         void SaveColorImage(const std::vector<LLGL::ColorRGBub>& image, const LLGL::Extent2D& extent, const std::string& name);
@@ -442,6 +461,9 @@ class TestbedContext
             void*               data,
             std::size_t         dataSize
         );
+
+        const char* GetResultFileSuffix() const;
+        std::string GetResultPath() const;
 
     private:
 

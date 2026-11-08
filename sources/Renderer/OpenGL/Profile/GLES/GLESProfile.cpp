@@ -24,11 +24,6 @@ int GetRendererID()
     return RendererID::OpenGLES;
 }
 
-const char* GetModuleName()
-{
-    return "OpenGLES3";
-}
-
 const char* GetRendererName()
 {
     return "OpenGL ES 3";
@@ -119,7 +114,7 @@ static_assert(LLGL_MAX_NUM_COLOR_ATTACHMENTS <= 16, "GLES profile can only handl
 
 void DrawBuffer(GLenum buf)
 {
-    if (buf >= GL_COLOR_ATTACHMENT0 && buf <= GL_COLOR_ATTACHMENT0 + LLGL_MAX_NUM_COLOR_ATTACHMENTS)
+    if (buf >= GL_COLOR_ATTACHMENT0 && buf < GL_COLOR_ATTACHMENT0 + LLGL_MAX_NUM_COLOR_ATTACHMENTS)
     {
         /*
         GL_COLOR_ATTACHMENT(i) must only be used at the i-th binding point in GLES/WebGL,
@@ -132,6 +127,14 @@ void DrawBuffer(GLenum buf)
     }
     else
         glDrawBuffers(1, &buf);
+}
+
+void TexParameterSwizzleRGBA(GLenum target, const GLint params[4])
+{
+    glTexParameteri(target, GL_TEXTURE_SWIZZLE_R, params[0]);
+    glTexParameteri(target, GL_TEXTURE_SWIZZLE_G, params[1]);
+    glTexParameteri(target, GL_TEXTURE_SWIZZLE_B, params[2]);
+    glTexParameteri(target, GL_TEXTURE_SWIZZLE_A, params[3]);
 }
 
 void FramebufferTexture1D(GLenum /*target*/, GLenum /*attachment*/, GLenum /*textarget*/, GLuint /*texture*/, GLint /*level*/)

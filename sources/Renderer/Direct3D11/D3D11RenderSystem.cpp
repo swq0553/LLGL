@@ -19,6 +19,7 @@
 #include "../../Core/CoreUtils.h"
 #include "../../Core/StringUtils.h"
 #include "../../Core/Assertion.h"
+#include "../../Core/MacroUtils.h"
 #include "../../Platform/Module.h"
 #include "D3D11ObjectUtils.h"
 #include <limits.h>
@@ -51,7 +52,8 @@ D3D11RenderSystem::D3D11RenderSystem(const RenderSystemDescriptor& renderSystemD
     const bool isDebugDevice    = ((renderSystemDesc.flags & RenderSystemFlags::DebugDevice   ) != 0);
     const bool isSoftwareDevice = ((renderSystemDesc.flags & RenderSystemFlags::SoftwareDevice) != 0);
 
-    if (auto* customNativeHandle = GetRendererNativeHandle<Direct3D11::RenderSystemNativeHandle>(renderSystemDesc))
+    auto* customNativeHandle = GetRendererNativeHandle<Direct3D11::RenderSystemNativeHandle>(renderSystemDesc);
+    if (customNativeHandle != nullptr && customNativeHandle->device != nullptr)
     {
         /* Query all DXGI interfaces from native handle */
         HRESULT hr = QueryDXInterfacesFromNativeHandle(*customNativeHandle);
@@ -59,13 +61,26 @@ D3D11RenderSystem::D3D11RenderSystem(const RenderSystemDescriptor& renderSystemD
     }
     else
     {
+        /*
+        Constraint-driven path: the caller may pass a native handle with device==nullptr to
+        request normal device creation under additional constraints (e.g. the OpenXR binding
+        supplies an adapter LUID and minimum feature level).
+        */
+        LUID preferredLuid{};
+        D3D_FEATURE_LEVEL minFeatureLevel = static_cast<D3D_FEATURE_LEVEL>(0);
+        if (customNativeHandle != nullptr)
+        {
+            preferredLuid   = customNativeHandle->preferredAdapterLuid;
+            minFeatureLevel = customNativeHandle->minFeatureLevel;
+        }
+
         /* Create DXGU factory, query video adapters, and create D3D11 device */
         CreateFactory();
 
-        ComPtr<IDXGIAdapter> preferredAdatper;
-        QueryVideoAdapters(renderSystemDesc.flags, preferredAdatper);
+        ComPtr<IDXGIAdapter> preferredAdapter;
+        QueryVideoAdapters(renderSystemDesc.flags, preferredLuid, preferredAdapter);
 
-        HRESULT hr = CreateDevice(preferredAdatper.Get(), isDebugDevice, isSoftwareDevice);
+        HRESULT hr = CreateDevice(preferredAdapter.Get(), minFeatureLevel, isDebugDevice, isSoftwareDevice);
         DXThrowIfFailed(hr, "failed to create D3D11 device");
         QueryDXDeviceVersion();
     }
@@ -84,15 +99,15 @@ D3D11RenderSystem::D3D11RenderSystem(const RenderSystemDescriptor& renderSystemD
     CreateStateManagerAndCommandQueue();
 
     /* Initialize MIP-map generator singleton */
-    D3D11MipGenerator::Get().InitializeDevice(device_);
-    D3D11BuiltinShaderFactory::Get().CreateBuiltinShaders(device_.Get());
+    sharedDeviceObjects_.mipGenerator.InitializeDevice(device_);
+    sharedDeviceObjects_.builtinShaderFactory.CreateBuiltinShaders(device_.Get());
 }
 
 D3D11RenderSystem::~D3D11RenderSystem()
 {
     /* Release resource of singletons first */
-    D3D11MipGenerator::Get().Clear();
-    D3D11BuiltinShaderFactory::Get().Clear();
+    sharedDeviceObjects_.mipGenerator.Clear();
+    sharedDeviceObjects_.builtinShaderFactory.Clear();
 }
 
 /* ----- Swap-chain ----- */
@@ -121,7 +136,7 @@ CommandBuffer* D3D11RenderSystem::CreateCommandBuffer(const CommandBufferDescrip
     if ((commandBufferDesc.flags & (CommandBufferFlags::ImmediateSubmit)) != 0)
     {
         /* Create command buffer with immediate context */
-        return commandBuffers_.emplace<D3D11PrimaryCommandBuffer>(device_.Get(), context_, stateMngr_, commandBufferDesc);
+        return commandBuffers_.emplace<D3D11PrimaryCommandBuffer>(*this, context_, stateMngr_, commandBufferDesc);
     }
     else if ((commandBufferDesc.flags & (CommandBufferFlags::Secondary)) != 0)
     {
@@ -142,7 +157,7 @@ CommandBuffer* D3D11RenderSystem::CreateCommandBuffer(const CommandBufferDescrip
         deferredStateMngrRefs_.push_back(deferredStateMngr.get());
 
         /* Create command buffer with deferred context and dedicated state manager */
-        return commandBuffers_.emplace<D3D11PrimaryCommandBuffer>(device_.Get(), deferredContext, std::move(deferredStateMngr), commandBufferDesc);
+        return commandBuffers_.emplace<D3D11PrimaryCommandBuffer>(*this, deferredContext, std::move(deferredStateMngr), commandBufferDesc);
     }
 }
 
@@ -178,10 +193,9 @@ Buffer* D3D11RenderSystem::CreateBuffer(const BufferDescriptor& bufferDesc, cons
         return buffers_.emplace<D3D11Buffer>(device_.Get(), bufferDesc, initialData);
 }
 
-BufferArray* D3D11RenderSystem::CreateBufferArray(std::uint32_t numBuffers, Buffer* const * bufferArray)
+BufferArray* D3D11RenderSystem::CreateBufferArray(ArrayView<VertexBufferView> bufferViews)
 {
-    RenderSystem::AssertCreateBufferArray(numBuffers, bufferArray);
-    return bufferArrays_.emplace<D3D11BufferArray>(numBuffers, bufferArray);
+    return bufferArrays_.emplace<D3D11BufferArray>(bufferViews);
 }
 
 void D3D11RenderSystem::Release(Buffer& buffer)
@@ -239,7 +253,7 @@ Texture* D3D11RenderSystem::CreateTexture(const TextureDescriptor& textureDesc, 
 
     /* Generate MIP-maps if enabled */
     if (initialImage != nullptr && MustGenerateMipsOnCreate(textureDesc))
-        D3D11MipGenerator::Get().GenerateMips(context_.Get(), *textureD3D);
+        sharedDeviceObjects_.mipGenerator.GenerateMips(context_.Get(), *textureD3D);
 
     return textureD3D;
 }
@@ -383,7 +397,7 @@ void D3D11RenderSystem::Release(Sampler& sampler)
 
 /* ----- Resource Heaps ----- */
 
-ResourceHeap* D3D11RenderSystem::CreateResourceHeap(const ResourceHeapDescriptor& resourceHeapDesc, const ArrayView<ResourceViewDescriptor>& initialResourceViews)
+ResourceHeap* D3D11RenderSystem::CreateResourceHeap(const ResourceHeapDescriptor& resourceHeapDesc, ArrayView<ResourceViewDescriptor> initialResourceViews)
 {
     return resourceHeaps_.emplace<D3D11ResourceHeap>(resourceHeapDesc, initialResourceViews);
 }
@@ -393,7 +407,7 @@ void D3D11RenderSystem::Release(ResourceHeap& resourceHeap)
     resourceHeaps_.erase(&resourceHeap);
 }
 
-std::uint32_t D3D11RenderSystem::WriteResourceHeap(ResourceHeap& resourceHeap, std::uint32_t firstDescriptor, const ArrayView<ResourceViewDescriptor>& resourceViews)
+std::uint32_t D3D11RenderSystem::WriteResourceHeap(ResourceHeap& resourceHeap, std::uint32_t firstDescriptor, ArrayView<ResourceViewDescriptor> resourceViews)
 {
     auto& resourceHeapD3D = LLGL_CAST(D3D11ResourceHeap&, resourceHeap);
     return resourceHeapD3D.WriteResourceViews(firstDescriptor, resourceViews);
@@ -555,6 +569,8 @@ bool D3D11RenderSystem::GetNativeHandle(void* nativeHandle, std::size_t nativeHa
         nativeHandleD3D->device->AddRef();
         nativeHandleD3D->deviceContext = context_.Get();
         nativeHandleD3D->deviceContext->AddRef();
+        nativeHandleD3D->preferredAdapterLuid = {};
+        nativeHandleD3D->minFeatureLevel = device_->GetFeatureLevel();
         return true;
     }
     return false;
@@ -638,13 +654,16 @@ void D3D11RenderSystem::CreateFactory()
     DXThrowIfCreateFailed(hr, "IDXGIFactory2");
     #endif
 
-    #if LLGL_D3D11_ENABLE_FEATURELEVEL >= 1
+    #if LLGL_D3D11_ENABLE_FEATURELEVEL >= 1 || defined LLGL_BUILD_XR_OPENXR
     hr = CreateDXGIFactory1(IID_PPV_ARGS(&factory1_));
     if (SUCCEEDED(hr))
     {
         factory1_.As(&factory_);
         return;
     }
+    #ifdef LLGL_BUILD_XR_OPENXR
+    DXThrowIfCreateFailed(hr, "IDXGIFactory1");
+    #endif
     #endif
 
     #ifdef LLGL_OS_WIN32
@@ -653,15 +672,34 @@ void D3D11RenderSystem::CreateFactory()
     #endif
 }
 
-void D3D11RenderSystem::QueryVideoAdapters(long flags, ComPtr<IDXGIAdapter>& outPreferredAdatper)
+void D3D11RenderSystem::QueryVideoAdapters(long flags, const LUID& preferredAdapterLuid, ComPtr<IDXGIAdapter>& outPreferredAdapter)
 {
-    videoAdatperInfo_ = DXGetVideoAdapterInfo(factory_.Get(), flags, outPreferredAdatper.ReleaseAndGetAddressOf());
+    /* When an explicit LUID is provided, locate that adapter and skip the vendor-preference flow. */
+    if (preferredAdapterLuid.LowPart != 0 || preferredAdapterLuid.HighPart != 0)
+    {
+        ComPtr<IDXGIAdapter> adapter;
+        for (UINT i = 0; factory_->EnumAdapters(i, adapter.ReleaseAndGetAddressOf()) != DXGI_ERROR_NOT_FOUND; ++i)
+        {
+            DXGI_ADAPTER_DESC desc{};
+            if (SUCCEEDED(adapter->GetDesc(&desc)) &&
+                desc.AdapterLuid.LowPart  == preferredAdapterLuid.LowPart &&
+                desc.AdapterLuid.HighPart == preferredAdapterLuid.HighPart)
+            {
+                DXConvertVideoAdapterInfo(adapter.Get(), desc, videoAdapterInfo_);
+                outPreferredAdapter = adapter;
+                return;
+            }
+        }
+        /* Fall through to the generic picker if the LUID didn't match anything (caller will see this via CreateDevice failure). */
+    }
+
+    videoAdapterInfo_ = DXGetVideoAdapterInfo(factory_.Get(), flags, outPreferredAdapter.ReleaseAndGetAddressOf());
 }
 
-HRESULT D3D11RenderSystem::CreateDevice(IDXGIAdapter* adapter, bool isDebugDevice, bool isSoftwareDevice)
+HRESULT D3D11RenderSystem::CreateDevice(IDXGIAdapter* adapter, D3D_FEATURE_LEVEL minFeatureLevel, bool isDebugDevice, bool isSoftwareDevice)
 {
     /* Find list of feature levels to select from, and statically determine maximal feature level */
-    const D3D_FEATURE_LEVEL featureLevels[] =
+    const D3D_FEATURE_LEVEL allFeatureLevels[] =
     {
         #if LLGL_D3D11_ENABLE_FEATURELEVEL >= 1
         D3D_FEATURE_LEVEL_11_1,
@@ -673,6 +711,18 @@ HRESULT D3D11RenderSystem::CreateDevice(IDXGIAdapter* adapter, bool isDebugDevic
         D3D_FEATURE_LEVEL_9_2,
         D3D_FEATURE_LEVEL_9_1,
     };
+
+    /* If a minimum feature level is requested, filter the ladder down to entries >= minFeatureLevel. */
+    const D3D_FEATURE_LEVEL* featureLevelsPtr = allFeatureLevels;
+    std::size_t              featureLevelsLen = LLGL_ARRAY_LENGTH(allFeatureLevels);
+    if (minFeatureLevel != static_cast<D3D_FEATURE_LEVEL>(0))
+    {
+        while (featureLevelsLen > 0 && featureLevelsPtr[featureLevelsLen - 1] < minFeatureLevel)
+            --featureLevelsLen;
+        if (featureLevelsLen == 0)
+            return E_INVALIDARG;
+    }
+    const ArrayView<D3D_FEATURE_LEVEL> featureLevels{ featureLevelsPtr, featureLevelsLen };
 
     HRESULT hr = S_OK;
 
@@ -689,11 +739,11 @@ HRESULT D3D11RenderSystem::CreateDevice(IDXGIAdapter* adapter, bool isDebugDevic
     if (SUCCEEDED(hr))
         return hr;
 
-    /* Try to create device with default adapter if preferred one failed */
-    if (adapter != nullptr)
+    /* Try to create device with default adapter if preferred one failed (skipped when a LUID was pinned). */
+    if (adapter != nullptr && minFeatureLevel == static_cast<D3D_FEATURE_LEVEL>(0))
     {
         /* Update video adapter info with default adapter */
-        videoAdatperInfo_ = DXGetVideoAdapterInfo(factory_.Get());
+        videoAdapterInfo_ = DXGetVideoAdapterInfo(factory_.Get());
         hr = CreateDeviceWithFlags(nullptr, featureLevels, isSoftwareDevice);
         if (SUCCEEDED(hr))
             return hr;
@@ -724,6 +774,12 @@ HRESULT D3D11RenderSystem::CreateDeviceWithFlags(IDXGIAdapter* adapter, const Ar
 
 HRESULT D3D11RenderSystem::CreateDeviceWithFlagsAndDriverType(IDXGIAdapter* adapter, D3D_DRIVER_TYPE driverType, const ArrayView<D3D_FEATURE_LEVEL>& featureLevels, UINT flags)
 {
+    // D3D11CreateDevice rejects a non-null adapter combined with any driver type other than
+    // D3D_DRIVER_TYPE_UNKNOWN (returns E_INVALIDARG). When an adapter is supplied the driver
+    // type is implicit in that adapter, so coerce to UNKNOWN.
+    if (adapter != nullptr)
+        driverType = D3D_DRIVER_TYPE_UNKNOWN;
+
     return D3D11CreateDevice(
         adapter,                                    // Video adapter
         driverType,                                 // Driver type
@@ -764,7 +820,7 @@ HRESULT D3D11RenderSystem::QueryDXInterfacesFromNativeHandle(const Direct3D11::R
     hr = adapter->GetDesc(&dxgiAdapterDesc);
     DXThrowIfFailed(hr, "failed to get descriptor from DXGI adapter");
 
-    DXConvertVideoAdapterInfo(adapter.Get(), dxgiAdapterDesc, videoAdatperInfo_);
+    DXConvertVideoAdapterInfo(adapter.Get(), dxgiAdapterDesc, videoAdapterInfo_);
 
     /* Get DXGI factory */
     hr = adapter->GetParent(IID_PPV_ARGS(&factory_));
@@ -777,9 +833,11 @@ void D3D11RenderSystem::QueryDXDeviceVersion()
 {
     LLGL_ASSERT_PTR(device_);
 
+    HRESULT hr = S_OK;
+
     /* Try to get an extended D3D11 device */
     #if LLGL_D3D11_ENABLE_FEATURELEVEL >= 3
-    HRESULT hr = device_->QueryInterface(IID_PPV_ARGS(&device3_));
+    hr = device_->QueryInterface(IID_PPV_ARGS(&device3_));
     if (FAILED(hr))
     #endif
     {
@@ -840,8 +898,8 @@ void D3D11RenderSystem::QueryRendererInfo(RendererInfo& info)
     info.shadingLanguageName = "HLSL " + std::string(DXFeatureLevelToShaderModel(GetFeatureLevel()));
 
     /* Initialize video adapter strings */
-    info.deviceName = videoAdatperInfo_.name.c_str();
-    info.vendorName = GetVendorName(videoAdatperInfo_.vendor);
+    info.deviceName = videoAdapterInfo_.name.c_str();
+    info.vendorName = GetVendorName(videoAdapterInfo_.vendor);
 }
 
 // Returns the HLSL version for the specified Direct3D feature level.
@@ -866,12 +924,7 @@ static std::vector<ShadingLanguage> DXGetHLSLVersions(D3D_FEATURE_LEVEL featureL
 static std::vector<Format> GetDefaultSupportedDXTextureFormats(D3D_FEATURE_LEVEL featureLevel)
 {
     std::vector<Format> formats;
-
-    std::size_t numFormats = 0;
-    DXGetDefaultSupportedTextureFormats(nullptr, &numFormats);
-
-    formats.resize(numFormats, Format::Undefined);
-    DXGetDefaultSupportedTextureFormats(formats.data(), nullptr);
+    DXGetDefaultSupportedTextureFormats(formats);
 
     if (featureLevel >= D3D_FEATURE_LEVEL_10_0)
     {
@@ -879,9 +932,36 @@ static std::vector<Format> GetDefaultSupportedDXTextureFormats(D3D_FEATURE_LEVEL
             formats.end(),
             { Format::BC4UNorm, Format::BC4SNorm, Format::BC5UNorm, Format::BC5SNorm }
         );
+
+        if (featureLevel >= D3D_FEATURE_LEVEL_11_0)
+        {
+            formats.insert(
+                formats.end(),
+                { Format::BC6HUFloat, Format::BC6HSFloat, Format::BC7UNorm, Format::BC7UNorm_sRGB }
+            );
+        }
     }
 
     return formats;
+}
+
+/*
+D3D11SwapChain always creates its back buffer as DXGI_FORMAT_R8G8B8A8_UNORM and ignores
+SwapChainDescriptor::colorFormat, so this is the only format the color buffer can have.
+*/
+static std::vector<Format> GetSupportedDXSwapChainColorFormats()
+{
+    return { Format::RGBA8UNorm };
+}
+
+// Returns the depth-stencil formats DXPickDepthStencilFormat can produce on the given feature level.
+static std::vector<Format> GetSupportedDXSwapChainDepthStencilFormats(D3D_FEATURE_LEVEL featureLevel)
+{
+    /* DXGI_FORMAT_D32_FLOAT and DXGI_FORMAT_D32_FLOAT_S8X24_UINT require feature level 10.0 */
+    if (featureLevel >= D3D_FEATURE_LEVEL_10_0)
+        return { Format::D16UNorm, Format::D24UNormS8UInt, Format::D32Float, Format::D32FloatS8X24UInt };
+    else
+        return { Format::D16UNorm, Format::D24UNormS8UInt };
 }
 
 static std::uint32_t GetMaxTextureDimension(D3D_FEATURE_LEVEL featureLevel)
@@ -927,6 +1007,9 @@ void D3D11RenderSystem::QueryRenderingCaps(RenderingCapabilities& caps)
     caps.clippingRange                              = ClippingRange::ZeroToOne;
     caps.shadingLanguages                           = DXGetHLSLVersions(featureLevel);
     caps.textureFormats                             = GetDefaultSupportedDXTextureFormats(featureLevel);
+    caps.vertexFormats                              = GetSupportedDXVertexFormats();
+    caps.swapChainColorFormats                      = GetSupportedDXSwapChainColorFormats();
+    caps.swapChainDepthStencilFormats               = GetSupportedDXSwapChainDepthStencilFormats(featureLevel);
 
     caps.features.hasRenderTargets                  = true;
     caps.features.has3DTextures                     = true;
@@ -976,6 +1059,7 @@ void D3D11RenderSystem::QueryRenderingCaps(RenderingCapabilities& caps)
     caps.limits.maxViewportSize[1]                  = D3D11_VIEWPORT_BOUNDS_MAX;
     caps.limits.maxBufferSize                       = UINT_MAX;
     caps.limits.maxConstantBufferSize               = D3D11_REQ_CONSTANT_BUFFER_ELEMENT_COUNT * 16;
+    caps.limits.maxVertexBufferInputs               = (featureLevel >= D3D_FEATURE_LEVEL_10_1 ? D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT : 16);
     caps.limits.maxStreamOutputs                    = 4u;
     caps.limits.maxTessFactor                       = 64u;
     caps.limits.minConstantBufferAlignment          = 256u;
@@ -1006,6 +1090,7 @@ static void InitializeD3DDepthStencilTextureWithDSV(
     ID3D11Device*           device,
     ID3D11DeviceContext*    context,
     D3D11Texture&           textureD3D,
+    Format                  format,
     const ClearValue&       clearValue)
 {
     /* Create intermediate depth-stencil view for texture */
@@ -1021,10 +1106,15 @@ static void InitializeD3DDepthStencilTextureWithDSV(
         textureD3D.GetNumArrayLayers()
     );
 
-    /* Clear view with depth-stencil values */
+    /* Clear view with depth-stencil values; only set the stencil flag if the format actually
+       has a stencil aspect (D3D11 debug layer rejects stencil-clear on a depth-only DSV). */
+    UINT clearFlags = D3D11_CLEAR_DEPTH;
+    if (IsStencilFormat(format))
+        clearFlags |= D3D11_CLEAR_STENCIL;
+
     context->ClearDepthStencilView(
         dsv.Get(),
-        D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL,
+        clearFlags,
         clearValue.depth,
         static_cast<UINT8>(clearValue.stencil)
     );
@@ -1122,6 +1212,7 @@ void D3D11RenderSystem::InitializeGpuTexture(
                     device_.Get(),
                     context_.Get(),
                     textureD3D,
+                    textureDesc.format,
                     textureDesc.clearValue
                 );
             }

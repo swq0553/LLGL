@@ -39,8 +39,8 @@ static constexpr long Dim2D_3D      = Dim2D | Dim3D;
 static constexpr long Dim1D_2D_3D   = Dim1D | Dim2D | Dim3D;
 static constexpr long SInt          = Integer;
 static constexpr long UInt          = Integer | Unsigned;
-static constexpr long SNorm         = Norm;
-static constexpr long UNorm         = Unsigned | Norm;
+static constexpr long SNorm         = SInt | Norm;
+static constexpr long UNorm         = UInt | Norm;
 static constexpr long SFloat        = 0;
 static constexpr long UFloat        = Unsigned;
 
@@ -97,7 +97,7 @@ static const FormatAttributes g_formatAttribs[] =
     /* --- RGB color formats --- */
 //   bits  w  h  c  format                     dataType
     {  24, 1, 1, 3, ImageFormat::RGB,          DataType::UInt8,     Vertex | GenMips | Dim1D_2D_3D | DimCube | UNorm           }, // RGB8UNorm
-    {  24, 1, 1, 3, ImageFormat::RGB,          DataType::UInt8,     Vertex | GenMips | Dim1D_2D_3D | DimCube | UNorm | sRGB    }, // RGB8UNorm_sRGB
+    {  24, 1, 1, 3, ImageFormat::RGB,          DataType::UInt8,              GenMips | Dim1D_2D_3D | DimCube | UNorm | sRGB    }, // RGB8UNorm_sRGB
     {  24, 1, 1, 3, ImageFormat::RGB,          DataType::Int8,      Vertex | GenMips | Dim1D_2D_3D | DimCube | SNorm           }, // RGB8SNorm
     {  24, 1, 1, 3, ImageFormat::RGB,          DataType::UInt8,     Vertex | GenMips | Dim1D_2D_3D | DimCube | UInt            }, // RGB8UInt
     {  24, 1, 1, 3, ImageFormat::RGB,          DataType::Int8,      Vertex | GenMips | Dim1D_2D_3D | DimCube | SInt            }, // RGB8SInt
@@ -117,7 +117,7 @@ static const FormatAttributes g_formatAttribs[] =
     /* --- RGBA color formats --- */
 //   bits  w  h  c  format                     dataType
     {  32, 1, 1, 4, ImageFormat::RGBA,         DataType::UInt8,     Vertex | GenMips | Dim1D_2D_3D | DimCube | UNorm           }, // RGBA8UNorm
-    {  32, 1, 1, 4, ImageFormat::RGBA,         DataType::UInt8,     Vertex | GenMips | Dim1D_2D_3D | DimCube | UNorm | sRGB    }, // RGBA8UNorm_sRGB
+    {  32, 1, 1, 4, ImageFormat::RGBA,         DataType::UInt8,              GenMips | Dim1D_2D_3D | DimCube | UNorm | sRGB    }, // RGBA8UNorm_sRGB
     {  32, 1, 1, 4, ImageFormat::RGBA,         DataType::Int8,      Vertex | GenMips | Dim1D_2D_3D | DimCube | SNorm           }, // RGBA8SNorm
     {  32, 1, 1, 4, ImageFormat::RGBA,         DataType::UInt8,     Vertex | GenMips | Dim1D_2D_3D | DimCube | UInt            }, // RGBA8UInt
     {  32, 1, 1, 4, ImageFormat::RGBA,         DataType::Int8,      Vertex | GenMips | Dim1D_2D_3D | DimCube | SInt            }, // RGBA8SInt
@@ -136,11 +136,11 @@ static const FormatAttributes g_formatAttribs[] =
 
     /* --- BGRA color formats --- */
 //   bits  w  h  c  format                     dataType
-    {  32, 1, 1, 4, ImageFormat::BGRA,         DataType::UInt8,     GenMips | Dim1D_2D_3D | DimCube | UNorm                    }, // BGRA8UNorm
-    {  32, 1, 1, 4, ImageFormat::BGRA,         DataType::UInt8,     GenMips | Dim1D_2D_3D | DimCube | UNorm | sRGB             }, // BGRA8UNorm_sRGB
-    {  32, 1, 1, 4, ImageFormat::BGRA,         DataType::Int8,      GenMips | Dim1D_2D_3D | DimCube | SNorm                    }, // BGRA8SNorm
-    {  32, 1, 1, 4, ImageFormat::BGRA,         DataType::UInt8,     GenMips | Dim1D_2D_3D | DimCube | UInt                     }, // BGRA8UInt
-    {  32, 1, 1, 4, ImageFormat::BGRA,         DataType::Int8,      GenMips | Dim1D_2D_3D | DimCube | SInt                     }, // BGRA8SInt
+    {  32, 1, 1, 4, ImageFormat::BGRA,         DataType::UInt8,     Vertex | GenMips | Dim1D_2D_3D | DimCube | UNorm           }, // BGRA8UNorm
+    {  32, 1, 1, 4, ImageFormat::BGRA,         DataType::UInt8,              GenMips | Dim1D_2D_3D | DimCube | UNorm | sRGB    }, // BGRA8UNorm_sRGB
+    {  32, 1, 1, 4, ImageFormat::BGRA,         DataType::Int8,      Vertex | GenMips | Dim1D_2D_3D | DimCube | SNorm           }, // BGRA8SNorm
+    {  32, 1, 1, 4, ImageFormat::BGRA,         DataType::UInt8,     Vertex | GenMips | Dim1D_2D_3D | DimCube | UInt            }, // BGRA8UInt
+    {  32, 1, 1, 4, ImageFormat::BGRA,         DataType::Int8,      Vertex | GenMips | Dim1D_2D_3D | DimCube | SInt            }, // BGRA8SInt
 
     /* --- Packed formats --- */
 //   bits  w  h  c  format                     dataType
@@ -149,6 +149,8 @@ static const FormatAttributes g_formatAttribs[] =
     {  32, 1, 1, 3, ImageFormat::RGB,          DataType::Undefined, GenMips | Dim1D_2D_3D | DimCube | UFloat | Packed          }, // RG11B10Float
     {  32, 1, 1, 3, ImageFormat::RGB,          DataType::Undefined, Mips    | Dim1D_2D_3D | DimCube | UFloat | Packed          }, // RGB9E5Float
     {  16, 1, 1, 4, ImageFormat::BGRA,         DataType::Undefined, GenMips | Dim1D_2D_3D | DimCube | UNorm  | Packed          }, // BGR5A1UNorm
+    {  16, 1, 1, 3, ImageFormat::BGR,          DataType::Undefined, GenMips | Dim1D_2D              | UNorm  | Packed          }, // B5G6R5UNorm
+    {  16, 1, 1, 4, ImageFormat::BGRA,         DataType::Undefined, GenMips | Dim1D_2D              | UNorm  | Packed          }, // BGRA4UNorm
 
     /* --- Depth-stencil formats --- */
 //   bits  w  h  c  format                     dataType
@@ -170,6 +172,10 @@ static const FormatAttributes g_formatAttribs[] =
     {  64, 4, 4, 1, ImageFormat::Compressed,   DataType::Int8,      Mips | Dim2D_3D | DimCube | Compr | SNorm                  }, // BC4SNorm
     { 128, 4, 4, 2, ImageFormat::Compressed,   DataType::UInt8,     Mips | Dim2D_3D | DimCube | Compr | UNorm                  }, // BC5UNorm
     { 128, 4, 4, 2, ImageFormat::Compressed,   DataType::Int8,      Mips | Dim2D_3D | DimCube | Compr | SNorm                  }, // BC5SNorm
+    { 128, 4, 4, 3, ImageFormat::Compressed,   DataType::Float16,   Mips | Dim2D_3D | DimCube | Compr | UFloat                 }, // BC6HUFloat
+    { 128, 4, 4, 3, ImageFormat::Compressed,   DataType::Float16,   Mips | Dim2D_3D | DimCube | Compr | SFloat                 }, // BC6HSFloat
+    { 128, 4, 4, 4, ImageFormat::Compressed,   DataType::UInt8,     Mips | Dim2D_3D | DimCube | Compr | UNorm                  }, // BC7UNorm
+    { 128, 4, 4, 4, ImageFormat::Compressed,   DataType::UInt8,     Mips | Dim2D_3D | DimCube | Compr | UNorm | sRGB           }, // BC7UNorm_sRGB
 
     /* --- Advanced scalable texture compression (ASTC) formats --- */
 //   bits  w  h  c  format                     dataType
@@ -294,7 +300,7 @@ LLGL_EXPORT bool IsDepthAndStencilFormat(const Format format)
 
 LLGL_EXPORT bool IsDepthFormat(const Format format)
 {
-    return ((GetFormatAttribs(format).flags & (FormatFlags::HasDepth)) != 0);
+    return ((GetFormatAttribs(format).flags & FormatFlags::HasDepth) != 0);
 }
 
 LLGL_EXPORT bool IsStencilFormat(const Format format)
@@ -315,12 +321,12 @@ LLGL_EXPORT bool IsNormalizedFormat(const Format format)
 
 LLGL_EXPORT bool IsIntegerFormat(const Format format)
 {
-    return ((GetFormatAttribs(format).flags & FormatFlags::IsInteger) != 0);
+    return ((GetFormatAttribs(format).flags & (FormatFlags::IsInteger | FormatFlags::IsNormalized)) == FormatFlags::IsInteger);
 }
 
 LLGL_EXPORT bool IsFloatFormat(const Format format)
 {
-    return ((GetFormatAttribs(format).flags & FormatFlags::IsInteger) == 0);
+    return ((GetFormatAttribs(format).flags & (FormatFlags::IsInteger | FormatFlags::IsNormalized | FormatFlags::HasDepthStencil | FormatFlags::IsCompressed)) == 0);
 }
 
 LLGL_EXPORT std::uint32_t DataTypeSize(const DataType dataType)

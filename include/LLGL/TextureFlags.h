@@ -266,7 +266,7 @@ struct TextureDescriptor
     /**
     \brief Optional name for debugging purposes. By default null.
     \remarks The final name of the native hardware resource is implementation defined.
-    \see RenderSystemChild::SetName
+    \see RenderSystemChild::SetDebugName
     */
     const char*     debugName       = nullptr;
 
@@ -391,7 +391,7 @@ struct TextureViewDescriptor
     /**
     \brief Hardware texture format. By default Format::RGBA8UNorm.
     \remarks The format of the parent texture and the texture view must be in the same format class.
-    There are two classes of format compatiblity between the texture view and its parent texture.
+    There are two classes of format compatibility between the texture view and its parent texture.
     What class of formats is supported for texture views depends on whether the backend supports format swizzling (see RenderingFeatures::hasTextureViewFormatSwizzle).
     \remarks Format compatibility classes for backends that <b>do support</b> format swizzling:
     | Class | Compatible texture formats |

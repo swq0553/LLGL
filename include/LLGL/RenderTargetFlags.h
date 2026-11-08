@@ -104,7 +104,7 @@ struct RenderTargetDescriptor
     /**
     \brief Optional name for debugging purposes. By default null.
     \remarks The final name of the native hardware resource is implementation defined.
-    \see RenderSystemChild::SetName
+    \see RenderSystemChild::SetDebugName
     */
     const char*             debugName   = nullptr;
 
@@ -140,6 +140,23 @@ struct RenderTargetDescriptor
     std::uint32_t           samples     = 1;
 
     /**
+    \brief Specifies the number of views for multiview (single-pass layered) rendering. By default 1.
+    \remarks If this is greater than 1, the render target renders to \c views consecutive array layers of its
+    attachments at once (single-pass stereo / cascaded shadow maps); see RenderPassDescriptor::views for details.
+    All attachments that reference a texture must be array textures with at least <code>arrayLayer + views</code> layers.
+    \remarks If \c renderPass is specified, the number of views is taken from that RenderPass and this field is ignored
+    (they must be consistent). If \c renderPass is null, the default render pass created for this render target uses
+    this view count.
+    \remarks This must not be greater than RenderingLimits::maxViews, and requires RenderingFeatures::hasMultiview.
+    A value of 0 is treated the same as 1 (multiview disabled).
+    \note Only supported with: Vulkan, Direct3D 12.
+    \see RenderPassDescriptor::views
+    \see RenderingFeatures::hasMultiview
+    \see RenderingLimits::maxViews
+    */
+    std::uint32_t           views       = 1;
+
+    /**
     \brief Specifies the list of color attachment descriptors.
     \remarks Each attachment descriptor describes into which target will be rendered.
     \remarks For each attachment, for which a texture is specified, this texture must have the same number of samples as specified by RenderTargetDescriptor::samples,
@@ -163,6 +180,23 @@ struct RenderTargetDescriptor
     \see TextureDescriptor::samples
     */
     AttachmentDescriptor    depthStencilAttachment;
+
+    /**
+    \brief Specifies the attachment descriptor the multi-sampled depth-stencil attachment will be resolved into after a render pass.
+    \remarks If a texture is specified for this attachment, RenderTargetDescriptor::depthStencilAttachment must also specify one,
+    the texture must have 1 sample, must have the same size as specified by RenderTargetDescriptor::resolution,
+    must have the same depth and stencil components as the depth-stencil attachment,
+    and must have been created with the binding flag BindFlags::DepthStencilAttachment.
+    \remarks Unlike a color resolve, which averages the samples, a depth-stencil resolve takes sample 0 unmodified:
+    averaging depth is not meaningful, and taking a single sample is the only mode every implementation supports.
+    Direct3D 12.1 has no resolve mode that takes a single sample, so it takes the minimum of all samples instead.
+    It also only resolves the depth plane, since NVIDIA drivers leave the stencil plane untouched, so the stencil plane of the resolve target is undefined.
+    \remarks Requires RenderingFeatures::hasDepthStencilResolve. Leave this attachment disabled if the multi-sampled
+    depth buffer is only used for depth testing within the pass, which lets the backend keep it in tile memory.
+    \note Only supported with: Vulkan, OpenGL, Metal, Direct3D 12.1.
+    \see RenderingFeatures::hasDepthStencilResolve
+    */
+    AttachmentDescriptor    depthStencilResolveAttachment;
 };
 
 

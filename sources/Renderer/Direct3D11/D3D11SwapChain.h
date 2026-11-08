@@ -47,7 +47,7 @@ class D3D11SwapChain final : public SwapChain
 
     public:
 
-        // Copyies a subresource region from the backbuffer (color or depth-stencil) into the destination resource.
+        // Copies a subresource region from the backbuffer (color or depth-stencil) into the destination resource.
         HRESULT CopySubresourceRegion(
             ID3D11DeviceContext*    context,
             ID3D11Resource*         dstResource,
@@ -69,7 +69,7 @@ class D3D11SwapChain final : public SwapChain
 
     private:
 
-        bool ResizeBuffersPrimary(const Extent2D& resolution) override;
+        Extent2D ResizeBuffersPrimary(const Extent2D& resolution) override;
 
         bool SetPresentSyncInterval(UINT syncInterval);
 

@@ -63,7 +63,7 @@ GLenum MapOrZero(const Format format)
 
         /* --- Packed formats --- */
         case Format::RGB10A2UNorm:      return GL_RGB10_A2;
-                
+
         /* --- Depth-stencil formats --- */
         case Format::D16UNorm:          return GL_DEPTH_COMPONENT16;
         case Format::D32Float:          return GL_DEPTH_COMPONENT32;
@@ -185,6 +185,8 @@ GLenum MapOrZero(const Format format)
         case Format::RG11B10Float:      return GL_R11F_G11F_B10F;
         case Format::RGB9E5Float:       return GL_RGB9_E5;
         case Format::BGR5A1UNorm:       return GL_RGB5_A1;      // Texture component swizzle
+        case Format::B5G6R5UNorm:       return GL_RGB565;       // Texture component swizzle
+        case Format::BGRA4UNorm:        return GL_RGBA4;        // Texture component swizzle
         #endif
 
         /* --- Depth-stencil formats --- */
@@ -216,6 +218,13 @@ GLenum MapOrZero(const Format format)
         case Format::BC5UNorm:          return GL_COMPRESSED_RED_GREEN_RGTC2_EXT;
         case Format::BC5SNorm:          return GL_COMPRESSED_SIGNED_RED_GREEN_RGTC2_EXT;
         #endif // /GL_EXT_texture_compression_rgtc
+
+        #if GL_ARB_texture_compression_bptc
+        case Format::BC6HUFloat:        return GL_COMPRESSED_RGB_BPTC_UNSIGNED_FLOAT_ARB;
+        case Format::BC6HSFloat:        return GL_COMPRESSED_RGB_BPTC_SIGNED_FLOAT_ARB;
+        case Format::BC7UNorm:          return GL_COMPRESSED_RGBA_BPTC_UNORM_ARB;
+        case Format::BC7UNorm_sRGB:     return GL_COMPRESSED_SRGB_ALPHA_BPTC_UNORM_ARB;
+        #endif // /GL_ARB_texture_compression_bptc
 
         /* --- Advanced scalable texture compression (ASTC) formats --- */
         #if GL_ES_VERSION_3_2
@@ -972,7 +981,7 @@ GLenum ToColorAttachment(std::uint32_t attachmentIndex)
     #endif
     return 0;
 }
-    
+
 #if LLGL_GL_ENABLE_OPENGL2X
 
 Format UnmapFormat(const GLenum internalFormat)
@@ -1004,7 +1013,7 @@ Format UnmapFormat(const GLenum internalFormat)
         /* --- RGBA color formats --- */
         case GL_RGBA:                                   /*pass*/
         case GL_RGBA8:                                  return Format::RGBA8UNorm;
-            
+
         case GL_SRGB_ALPHA:                             /*pass*/
         case GL_SRGB8_ALPHA8:                           return Format::RGBA8UNorm_sRGB;
 
@@ -1116,6 +1125,8 @@ Format UnmapFormat(const GLenum internalFormat)
         case GL_R11F_G11F_B10F:                         return Format::RG11B10Float;
         case GL_RGB9_E5:                                return Format::RGB9E5Float;
         case GL_RGB5_A1:                                return Format::BGR5A1UNorm;
+        case GL_RGB565:                                 return Format::B5G6R5UNorm;
+        case GL_RGBA4:                                  return Format::BGRA4UNorm;
         #endif
 
         /* --- Depth-stencil formats --- */
@@ -1149,6 +1160,14 @@ Format UnmapFormat(const GLenum internalFormat)
         case GL_COMPRESSED_RED_GREEN_RGTC2_EXT:         return Format::BC5UNorm;
         case GL_COMPRESSED_SIGNED_RED_GREEN_RGTC2_EXT:  return Format::BC5SNorm;
         #endif // /GL_EXT_texture_compression_rgtc
+
+
+        #if GL_ARB_texture_compression_bptc
+        case GL_COMPRESSED_RGB_BPTC_UNSIGNED_FLOAT_ARB: return Format::BC6HUFloat;
+        case GL_COMPRESSED_RGB_BPTC_SIGNED_FLOAT_ARB:   return Format::BC6HSFloat;
+        case GL_COMPRESSED_RGBA_BPTC_UNORM_ARB:         return Format::BC7UNorm;
+        case GL_COMPRESSED_SRGB_ALPHA_BPTC_UNORM_ARB:   return Format::BC7UNorm_sRGB;
+        #endif // /GL_ARB_texture_compression_bptc
 
         /* --- Advanced scalable texture compression (ASTC) formats --- */
         #if GL_ES_VERSION_3_2
@@ -1282,7 +1301,7 @@ bool IsIntegerTypedFormat(GLenum internalFormat)
             return false;
     }
 }
-    
+
 #else // !LLGL_GL_ENABLE_OPENGL2X
 
 bool IsIntegerTypedFormat(GLenum internalFormat)
@@ -1376,9 +1395,9 @@ GLenum BufferTargetToBindingPname(GLenum target)
     }
 }
 
-const char* SystemValueToString(SystemValue sytemValue, ShaderType shaderType)
+const char* SystemValueToString(SystemValue systemValue, ShaderType shaderType)
 {
-    switch (sytemValue)
+    switch (systemValue)
     {
         case SystemValue::Undefined:            break;
         case SystemValue::ClipDistance:         return "gl_ClipDistance";
@@ -1396,6 +1415,7 @@ const char* SystemValueToString(SystemValue sytemValue, ShaderType shaderType)
         case SystemValue::SampleID:             return "gl_SampleID";
         case SystemValue::Stencil:              return "gl_Stencil";
         case SystemValue::VertexID:             return "gl_VertexID";
+        case SystemValue::ViewIndex:            return "gl_ViewIndex";
         case SystemValue::ViewportIndex:        return "gl_ViewportIndex";
     }
     return nullptr;

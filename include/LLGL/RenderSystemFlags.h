@@ -18,9 +18,11 @@
 #include <LLGL/Container/StringLiteral.h>
 #include <LLGL/Container/DynamicVector.h>
 
+#include <LLGL/Deprecated.h>
+
 #include <LLGL/Platform/Platform.h>
 #if defined LLGL_OS_ANDROID
-#   include <android_native_app_glue.h>
+struct android_app;
 #endif
 
 #include <cstddef>
@@ -89,6 +91,7 @@ enum class ShadingLanguage
     HLSL_6_6        = (0x30000 | 660),  //!< HLSL 6.6 (since Direct3D 12). Shader model 6.6 adds dynamic resources to HLSL.
     HLSL_6_7        = (0x30000 | 670),  //!< HLSL 6.7 (since Direct3D 12). Shader model 6.7 adds advanced texture operations to HLSL.
     HLSL_6_8        = (0x30000 | 680),  //!< HLSL 6.8 (since Direct3D 12). Shader model 6.8 adds work graphs to HLSL.
+    HLSL_6_9        = (0x30000 | 690),  //!< HLSL 6.9 (since Direct3D 12). Shader model 6.9 adds long vectors with up to 1024 elements.
 
     Metal           = (0x40000),        //!< Metal Shading Language.
     Metal_1_0       = (0x40000 | 100),  //!< Metal 1.0 (since iOS 8.0).
@@ -104,7 +107,19 @@ enum class ShadingLanguage
     SPIRV           = (0x50000),        //!< SPIR-V Shading Language.
     SPIRV_100       = (0x50000 | 100),  //!< SPIR-V 1.0.
 
-    VersionBitmask  = 0x0000ffff,       //!< Bitmask for the version number of each shading language enumeration entry.
+    DXIL            = (0x60000),
+    DXIL_1_0        = (0x60000 | 100),  //!< DXIL 1.0 (since Direct3D 12) maps to Shader model 6.0. See HLSL_6_0.
+    DXIL_1_1        = (0x60000 | 110),  //!< DXIL 1.1 (since Direct3D 12) maps to Shader model 6.1. See HLSL_6_1.
+    DXIL_1_2        = (0x60000 | 120),  //!< DXIL 1.2 (since Direct3D 12) maps to Shader model 6.2. See HLSL_6_2.
+    DXIL_1_3        = (0x60000 | 130),  //!< DXIL 1.3 (since Direct3D 12) maps to Shader model 6.3. See HLSL_6_3.
+    DXIL_1_4        = (0x60000 | 140),  //!< DXIL 1.4 (since Direct3D 12) maps to Shader model 6.4. See HLSL_6_4.
+    DXIL_1_5        = (0x60000 | 150),  //!< DXIL 1.5 (since Direct3D 12) maps to Shader model 6.5. See HLSL_6_5.
+    DXIL_1_6        = (0x60000 | 160),  //!< DXIL 1.6 (since Direct3D 12) maps to Shader model 6.6. See HLSL_6_6.
+    DXIL_1_7        = (0x60000 | 170),  //!< DXIL 1.7 (since Direct3D 12) maps to Shader model 6.7. See HLSL_6_7.
+    DXIL_1_8        = (0x60000 | 180),  //!< DXIL 1.8 (since Direct3D 12) maps to Shader model 6.8. See HLSL_6_8.
+    DXIL_1_9        = (0x60000 | 190),  //!< DXIL 1.9 (since Direct3D 12) maps to Shader model 6.9. See HLSL_6_9.
+
+    VersionBitmask  = 0x0000FFFF,       //!< Bitmask for the version number of each shading language enumeration entry.
 };
 
 /**
@@ -313,6 +328,7 @@ struct RendererInfo
 \remarks This can be used for some refinements of a specific renderer, e.g. to configure the Vulkan device memory manager.
 \see RenderSystem::Load
 */
+LLGL_DEPRECATED_IGNORE_PUSH() // Suppress warnings the deprecated ::androidApp member raises via the implicit copy functions
 struct RenderSystemDescriptor
 {
     RenderSystemDescriptor() = default;
@@ -421,54 +437,60 @@ struct RenderSystemDescriptor
     */
     std::size_t         nativeHandleSize    = 0;
 
-    #ifdef LLGL_OS_ANDROID
-
     /**
-    \brief Android specific application descriptor. This descriptor is defined by the "native app glue" from the Android NDK.
-    \remarks This \b must be specified when compiling for the Android platform.
-    \remarks Here is an example for the main entry point on Android:
+    \brief Optional raw pointer to a platform specific context structure the render system is brought up with. By default null.
+    \remarks The structure it points to is identified by ::platformContextSize. Currently only used on Android,
+    where it is \b required and points to one of the following two structures:
+    \remarks A NativeActivity-based application - one entered through \c android_main(android_app*) - must hand
+    over its \c android_app state. Such an application advances through its startup lifecycle only while the
+    glue's event loop is pumped, and RenderSystem::Load does that pumping until the native window and content are
+    ready. It is also what LLGL's own windowing is built on: Canvas, Display, and the input events they deliver
+    all come from this loop, and LLGL installs its \c onInputEvent handler here.
     \code
-    #include <LLGL/LLGL.h>
-
-    ...
-
-    void MyMain(const LLGL::RenderSystemDescriptor& desc)
-    {
-       myRenderSystem = LLGL::RenderSystem::Load(desc);
-       ...
-    }
-
-    #if defined LLGL_OS_ANDROID
-
-    // Android specific main function
     void android_main(android_app* state)
     {
         LLGL::RenderSystemDescriptor desc{ "OpenGLES3" };
-        desc.androidApp = state;
-        MyMain(desc);
+        desc.platformContext     = state;
+        desc.platformContextSize = sizeof(*state);
+        myRenderSystem = LLGL::RenderSystem::Load(desc);
     }
-
-    #else
-
-    // Standard C/C++ main function
-    int main()
-    {
-        MyMain("OpenGL");
-        return 0;
-    }
-
-    #endif
     \endcode
-    \note Only supported on: Android.
+    \remarks An application whose Activity is written in Java - as with SDL - has no \c android_app to give, and
+    supplies an LLGL::AndroidContext filled in from its windowing library instead:
+    \code
+    LLGL::AndroidContext androidContext;
+    androidContext.applicationVM        = vm;        // from the JNI environment
+    androidContext.applicationActivity  = activity;  // a global reference
+    desc.platformContext     = &androidContext;
+    desc.platformContextSize = sizeof(androidContext);
+    \endcode
+    \see platformContextSize
+    \see AndroidContext
     */
+    void*               platformContext     = nullptr;
+
+    /**
+    \brief Specifies the size (in bytes) of the structure \c platformContext points to (use \c sizeof with the respective structure). By default 0.
+    \remarks This size is what identifies which structure \c platformContext points to.
+    \remarks If \c platformContext is null then this field is ignored.
+    \see platformContext
+    */
+    std::size_t         platformContextSize = 0;
+
+    #ifdef LLGL_OS_ANDROID
+
+    //! \deprecated Since 0.05b; Use platformContext instead!
+    LLGL_DEPRECATED("Identifier `androidApp` is deprecated since 0.05b; Use `platformContext` instead!", "platformContext")
     android_app*        androidApp          = nullptr;
 
     #endif // /LLGL_OS_ANDROID
 };
+LLGL_DEPRECATED_IGNORE_POP()
 
 /**
 \brief Contains the attributes for all supported rendering features.
 \see RenderingCapabilities::features
+\todo Add bitmask `:1` to all fields to drastically reduce size of this struct. This will be a breaking change as they can no longer be referenced individually.
 */
 struct RenderingFeatures
 {
@@ -507,6 +529,9 @@ struct RenderingFeatures
 
     /**
     \brief Specifies whether multi-sample textures are supported.
+    \note WebGL reports this as supported, but it only supports it for depth-stencil attachments, not for color attachments.
+    The WebGL backend can still render into multi-sampled render-targets, but only the resolve targets can be custom textures.
+    The multi-sampled render-target can only write into so called 'renderbuffers', which are internal GL objects that are not exposed directly.
     \see TextureType::Texture2DMS
     */
     bool hasMultiSampleTextures         = false;
@@ -596,12 +621,15 @@ struct RenderingFeatures
     bool hasComputeShaders              = false;
 
     /**
-    \brief Specifies whether mesh and amplification shaders are supported.
-    \remarks Mesh and amplification shaders belong to the same mesh pipeline but amplification shaders are optional to use in such a pipeline,
-    so amplification shader support is implied if mesh shaders are supported.
-    \see ShaderType::Amplification
+    \brief Specifies whether task and mesh shaders are supported.
+    \remarks Task and mesh shaders belong to the same mesh pipeline but task shaders are optional to use in such a pipeline,
+    so task shader support is implied if mesh shaders are supported.
+    \note Only supported with: Direct3D 12, Vulkan.
+    \see ShaderType::Task
     \see ShaderType::Mesh
     \see RenderSystem::CreatePipelineState(const MeshPipelineDescriptor&)
+    \see CommandBufferTier1::DrawMesh
+    \see CommandBufferTier1::DrawMeshIndirect
     */
     bool hasMeshShaders                 = false;
 
@@ -632,6 +660,30 @@ struct RenderingFeatures
     \see RenderingLimits::maxViewports
     */
     bool hasViewportArrays              = false;
+
+    /**
+    \brief Specifies whether multiview (single-pass layered) rendering is supported.
+    \remarks If supported, a render pass can broadcast a single draw command to multiple array layers of the
+    render target, with each invocation reading its layer index via SystemValue::ViewIndex. This is commonly
+    used for single-pass stereo rendering (VR) and cascaded shadow maps.
+    \note Only supported with: Vulkan, Direct3D 12.
+    \see RenderPassDescriptor::views
+    \see RenderingLimits::maxViews
+    \see SystemValue::ViewIndex
+    */
+    bool hasMultiview                   = false;
+
+    /**
+    \brief Specifies whether a multi-sampled depth-stencil attachment can be resolved.
+    \remarks Color attachments can always be resolved, but depth requires dedicated support: the implementation
+    must be told how to combine the samples (the depth of one sample, or their minimum or maximum) rather than
+    averaging them. Without this, a multi-sampled depth attachment's contents cannot be transferred to a
+    single-sampled texture, which matters when the single-sampled image is owned by something else - an XR
+    runtime submitting depth for reprojection, for instance.
+    \note Only supported with: Vulkan, OpenGL, Metal, Direct3D 12.1.
+    \see RenderTargetDescriptor::resolveAttachments
+    */
+    bool hasDepthStencilResolve         = false;
 
     /**
     \brief Specifies whether conservative rasterization is supported.
@@ -676,6 +728,13 @@ struct RenderingFeatures
     \see CommandBuffer:BeginRenderCondition
     */
     bool hasRenderCondition             = false;
+
+    /**
+    \brief Specifies whether variable rate shading (VRS) is supported.
+    \note Only supported with: Direct3D 12, Vulkan.
+    \see CommandBufferTier1::SetShadingRate
+    */
+    bool hasVariableRateShading         = false;
 };
 
 /**
@@ -772,6 +831,14 @@ struct RenderingLimits
     std::uint32_t   maxViewportSize[2]                  = { 0, 0 };
 
     /**
+    \brief Specifies the maximum number of views for multiview (single-pass layered) rendering.
+    \remarks This is the upper limit for RenderPassDescriptor::views. This values should only be more than 1 if \c hasMultiview is true.
+    \see RenderPassDescriptor::views
+    \see RenderingFeatures::hasMultiview
+    */
+    std::uint32_t   maxViews                            = 0;
+
+    /**
     \brief Specifies the maximum size (in bytes) that is supported for hardware buffers (vertex, index, storage buffers).
     \remarks Constant buffers are a special case for which \c maxConstantBufferSize can be used.
     \see BufferDescriptor::size
@@ -785,6 +852,14 @@ struct RenderingLimits
     \see BufferDescriptor::size
     */
     std::uint64_t   maxConstantBufferSize               = 0;
+
+    /**
+    \brief Specifies the maximum number of vertex buffer input slots that is supported by the graphics device.
+    \remarks
+    \see RenderSystem::CreateBufferArray
+    \see CommandBuffer::SetVertexBuffers
+    */
+    std::uint32_t   maxVertexBufferInputs               = 0;
 
     /**
     \brief Specifies the maximum number of simultaneous stream-output buffers.
@@ -893,6 +968,43 @@ struct RenderingCapabilities
     \see Format
     */
     std::vector<Format>             textureFormats;
+
+    /**
+    \brief Specifies the list of supported hardware vertex formats.
+    \remarks This is usually a much shorter list than \c textureFormats and does generally \e not include compressed or sRGB formats.
+    \see Format
+    */
+    std::vector<Format>             vertexFormats;
+
+    /**
+    \brief Specifies the list of color formats a swap-chain color buffer can have.
+    \remarks This is the set of formats SwapChain::GetColorFormat can return, i.e. a subset of \c textureFormats,
+    since a swap-chain color buffer must also be presentable and not every renderable format can be scanned out
+    by the display hardware. Requesting a format from this list via SwapChainDescriptor::colorFormat is a preference,
+    not a guarantee: if the renderer cannot honor it, it falls back to its automatic selection.
+    Use SwapChain::GetColorFormat to determine the format that was actually used.
+    \note With Vulkan, final support also depends on the presentation surface, which is not known until a swap-chain
+    is created, so a format listed here may still be rejected by a particular surface.
+    \note With Direct3D 11, Direct3D 12, and OpenGL, SwapChainDescriptor::colorFormat is currently not honored at all
+    and the color buffer always uses the format the backend picks itself.
+    \see SwapChainDescriptor::colorFormat
+    \see SwapChain::GetColorFormat
+    */
+    std::vector<Format>             swapChainColorFormats;
+
+    /**
+    \brief Specifies the list of depth-stencil formats a swap-chain depth-stencil buffer can have.
+    \remarks This is the set of formats SwapChain::GetDepthStencilFormat can return and the set of formats that can be
+    requested via SwapChainDescriptor::depthStencilFormat, i.e. a subset of Format::D16UNorm, Format::D24UNormS8UInt,
+    Format::D32Float, and Format::D32FloatS8X24UInt. If a requested format is not in this list, the renderer falls back
+    to its automatic selection. Use SwapChain::GetDepthStencilFormat to determine the format that was actually used.
+    \note With OpenGL, the depth-stencil buffer belongs to the pixel format the windowing system selects, so a request
+    is only a hint for that selection and the driver commonly substitutes a different format. Only the format that can
+    be relied upon is reported here; SwapChain::GetDepthStencilFormat may still return another one.
+    \see SwapChainDescriptor::depthStencilFormat
+    \see SwapChain::GetDepthStencilFormat
+    */
+    std::vector<Format>             swapChainDepthStencilFormats;
 
     /**
     \brief Specifies all supported hardware features.

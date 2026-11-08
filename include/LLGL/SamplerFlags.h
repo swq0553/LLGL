@@ -72,7 +72,6 @@ enum class SamplerAddressMode
 \see SamplerDescriptor::minFilter
 \see SamplerDescriptor::magFilter
 \see SamplerDescriptor::mipMapFilter
-\see Image::Resize(const Extent3D&, const SamplerFilter)
 */
 enum class SamplerFilter
 {
@@ -103,7 +102,7 @@ struct LLGL_EXPORT SamplerDescriptor
     /**
     \brief Optional name for debugging purposes. By default null.
     \remarks The final name of the native hardware resource is implementation defined.
-    \see RenderSystemChild::SetName
+    \see RenderSystemChild::SetDebugName
     */
     const char*         debugName       = nullptr;
 

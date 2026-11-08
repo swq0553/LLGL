@@ -1,4 +1,4 @@
-name: MS Windows
+name: MS Windows (MSVC 16+)
 
 on:
   push:
@@ -21,12 +21,22 @@ jobs:
     env:
       README: ${{ github.workspace }}/README.txt
       CONFIG: ${{ matrix.config == 'Debug' && 'Debug' || 'RelWithDebInfo' }}
+      DXC_URL: 'https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.8.2505.1/dxc_2025_07_14.zip'
+      DXC_ARCH: ${{ matrix.arch == 'Win32' && 'x86' || 'x64' }}
 
     steps:
     - name: Checkout Repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
       with:
         submodules: recursive
+
+    - name: Install Dependencies
+      if: matrix.ext == 'Full'
+      run: |
+        echo "-------------- Install DirectXShaderCompiler (DXC) --------------"
+        curl -s -L -o dxc.zip ${{ env.DXC_URL }}
+        tar -xf dxc.zip
+        echo "$PWD\bin\${{ env.DXC_ARCH }}" >> "$env:GITHUB_PATH"
 
     - name: Configure CMake
       run: >
@@ -35,6 +45,7 @@ jobs:
         -DLLGL_BUILD_RENDERER_OPENGL=ON
         -DLLGL_BUILD_RENDERER_DIRECT3D11=ON
         -DLLGL_BUILD_RENDERER_DIRECT3D12=ON
+        -DLLGL_D3D12_ENABLE_DXCOMPILER=ON
         -DLLGL_BUILD_EXAMPLES=ON
         -DLLGL_BUILD_TESTS=ON
         -DLLGL_BUILD_WRAPPER_C99=ON
@@ -50,7 +61,7 @@ jobs:
         echo "Place at root of LLGL repository to run examples and testbed." >> ${{ env.README }}
 
     - name: Upload Binaries
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v6
       if: matrix.ext == 'Full' && matrix.lib == 'Shared' && matrix.config == 'Release'
       with:
         name: LLGL-Windows-${{ matrix.config }}-${{ matrix.arch == 'x64' && 'x86_64' || 'x86' }}
@@ -63,13 +74,13 @@ jobs:
     - name: Testbed
       working-directory: tests/Testbed
       run: |
-        ${{ github.workspace }}/${{ matrix.arch }}/build/${{ env.CONFIG }}/${{ matrix.config == 'Debug' && 'TestbedD' || 'Testbed' }}.exe d3d11 d3d12 -v -f -t -g ${{ matrix.config == 'Debug' && '-d=gpu' || '' }}
+        ${{ github.workspace }}/${{ matrix.arch }}/build/${{ env.CONFIG }}/${{ matrix.config == 'Debug' && 'TestbedD' || 'Testbed' }}.exe d3d11 d3d12 -vftgi ${{ matrix.config == 'Debug' && '-d=gpu' || '' }}
 
     - name: Upload Test Report
-      uses: actions/upload-artifact@v4
-      if: always() && matrix.ext == 'Full' && matrix.arch == 'x64' && matrix.lib == 'Shared' && matrix.config == 'Release'
+      uses: actions/upload-artifact@v6
+      if: always() && matrix.ext == 'Full' && matrix.arch == 'x64' && matrix.lib == 'Shared'
       with:
-        name: LLGL-Win64-Test_Report
+        name: LLGL-Win64-Test_Report-${{ matrix.config }}
         path: |
           tests/Testbed/Output/Direct3D11/*.png
           tests/Testbed/Output/Direct3D11/Report.txt

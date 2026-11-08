@@ -63,7 +63,6 @@ void MTMultiSubmitCommandBuffer::End()
         FlushContext();
         PresentDrawables();
     }
-    buffer_.Pack();
 }
 
 void MTMultiSubmitCommandBuffer::Execute(CommandBuffer& secondaryCommandBuffer)
@@ -174,41 +173,17 @@ void MTMultiSubmitCommandBuffer::FillBuffer(
     std::uint32_t   value,
     std::uint64_t   fillSize)
 {
-#if 0 //TODO
-    if (fillSize == 0)
-        return;
-
-    auto& dstBufferMT = LLGL_CAST(MTBuffer&, dstBuffer);
-
-    /* Check if native "fillBuffer" command can be used */
-    const bool valueBytesAreEqual =
-    (
-        ((value >> 24) & 0x000000FF) == (value & 0x000000FF) &&
-        ((value >> 16) & 0x000000FF) == (value & 0x000000FF) &&
-        ((value >>  8) & 0x000000FF) == (value & 0x000000FF)
-    );
-
-    /* Determine buffer range for fill command */
-    NSRange range;
-    if (fillSize == LLGL_WHOLE_SIZE)
+    if (fillSize > 0)
     {
-        NSUInteger bufferSize = [dstBufferMT.GetNative() length];
-        range = NSMakeRange(0, bufferSize);
+        auto& dstBufferMT = LLGL_CAST(MTBuffer&, dstBuffer);
+        auto cmd = AllocCommand<MTCmdFillBuffer>(MTOpcodeFillBuffer);
+        {
+            cmd->dstBufferMT    = &dstBufferMT;
+            cmd->dstOffset      = dstOffset;
+            cmd->value          = value;
+            cmd->fillSize       = fillSize;
+        }
     }
-    else
-    {
-        range = NSMakeRange(
-            static_cast<NSUInteger>(dstOffset),
-            static_cast<NSUInteger>(fillSize)
-        );
-    }
-
-    /* Fill with native command if all four bytes are equal, otherwise use blit and comput commands */
-    if (valueBytesAreEqual)
-        FillBufferByte1(dstBufferMT, range, static_cast<std::uint8_t>(value & 0x000000FF));
-    else
-        FillBufferByte4(dstBufferMT, range, value);
-#endif
 }
 
 void MTMultiSubmitCommandBuffer::CopyTexture(
@@ -383,8 +358,7 @@ void MTMultiSubmitCommandBuffer::SetNativeVertexBuffers(NSUInteger count, const 
     }
 }
 
-//private
-void MTMultiSubmitCommandBuffer::SetVertexBufferInternal(Buffer& buffer)
+void MTMultiSubmitCommandBuffer::SetVertexBuffer(Buffer& buffer)
 {
     auto& bufferMT = LLGL_CAST(MTBuffer&, buffer);
     id<MTLBuffer> bufferId = bufferMT.GetNative();
@@ -392,14 +366,24 @@ void MTMultiSubmitCommandBuffer::SetVertexBufferInternal(Buffer& buffer)
     SetNativeVertexBuffers(1, &bufferId, &bufferOffset);
 }
 
-void MTMultiSubmitCommandBuffer::SetVertexBuffer(Buffer& buffer)
+void MTMultiSubmitCommandBuffer::SetVertexBuffer(Buffer& buffer, std::uint32_t /*stride*/, std::uint64_t offset)
 {
-    SetVertexBufferInternal(buffer);
+    auto& bufferMT = LLGL_CAST(MTBuffer&, buffer);
+    id<MTLBuffer> bufferId = bufferMT.GetNative();
+    const NSUInteger bufferOffset = static_cast<NSUInteger>(offset);
+    SetNativeVertexBuffers(1, &bufferId, &bufferOffset);
 }
 
-void MTMultiSubmitCommandBuffer::SetVertexBuffer(Buffer& buffer, std::uint32_t /*numVertexAttribs*/, const VertexAttribute* /*vertexAttribs*/)
+void MTMultiSubmitCommandBuffer::SetVertexBuffers(std::uint32_t numBufferViews, const VertexBufferView* bufferViews)
 {
-    SetVertexBufferInternal(buffer);
+    if (numBufferViews == 0 || bufferViews == nullptr)
+        return;
+
+    id<MTLBuffer> buffers[MTCommandContext::maxNumVertexBuffers];
+    NSUInteger offsets[MTCommandContext::maxNumVertexBuffers];
+    TranslateVertexBufferViews(numBufferViews, bufferViews, buffers, offsets);
+    
+    SetNativeVertexBuffers(static_cast<NSUInteger>(numBufferViews), buffers, offsets);
 }
 
 void MTMultiSubmitCommandBuffer::SetVertexBufferArray(BufferArray& bufferArray)
@@ -971,59 +955,6 @@ void MTMultiSubmitCommandBuffer::PresentDrawables()
     }
     views_.clear();
 }
-
-#if 0 //TODO
-void MTMultiSubmitCommandBuffer::FillBufferByte1(MTBuffer& bufferMT, const NSRange& range, std::uint8_t value)
-{
-    context_.PauseRenderEncoder();
-    {
-        auto blitEncoder = context_.BindBlitEncoder();
-        [blitEncoder fillBuffer:bufferMT.GetNative() range:range value:value];
-    }
-    context_.ResumeRenderEncoder();
-}
-
-void MTMultiSubmitCommandBuffer::FillBufferByte4(MTBuffer& bufferMT, const NSRange& range, std::uint32_t value)
-{
-    /* Use emulated fill command if buffer range is small enough to avoid having both a blit and compute encoder */
-    if (range.length > g_minFillBufferForKernel)
-        FillBufferByte4Accelerated(bufferMT, range, value);
-    else
-        FillBufferByte4Emulated(bufferMT, range, value);
-}
-
-void MTMultiSubmitCommandBuffer::FillBufferByte4Emulated(MTBuffer& bufferMT, const NSRange& range, std::uint32_t value)
-{
-    /* Copy value into stack local buffer */
-    std::uint32_t localBuffer[g_minFillBufferForKernel / sizeof(std::uint32_t)];
-    std::fill(std::begin(localBuffer), std::end(localBuffer), value);
-
-    /* Write clear value into first range of destination buffer */
-    UpdateBuffer(bufferMT, range.location, localBuffer, range.length);
-}
-
-//TODO: manage binding of compute PSO in MTCommandContext
-void MTMultiSubmitCommandBuffer::FillBufferByte4Accelerated(MTBuffer& bufferMT, const NSRange& range, std::uint32_t value)
-{
-    context_.PauseRenderEncoder();
-    {
-        auto computeEncoder = context_.BindComputeEncoder();
-
-        /* Bind compute PSO with kernel to fill buffer */
-        id<MTLComputePipelineState> pso = MTBuiltinPSOFactory::Get().GetComputePSO(MTBuiltinComputePSO::FillBufferByte4);
-        [computeEncoder setComputePipelineState:pso];
-
-        /* Bind destination buffer range and store clear value as input constant buffer */
-        [computeEncoder setBuffer:bufferMT.GetNative() offset:range.location atIndex:0];
-        [computeEncoder setBytes:&value length:sizeof(value) atIndex:1];
-
-        /* Dispatch compute kernels */
-        const NSUInteger numValues = range.length / sizeof(std::uint32_t);
-        DispatchThreads1D(computeEncoder, pso, numValues);
-    }
-    context_.ResumeRenderEncoder();
-}
-#endif //TODO
 
 void MTMultiSubmitCommandBuffer::GenerateMipmapsForTexture(id<MTLTexture> texture)
 {

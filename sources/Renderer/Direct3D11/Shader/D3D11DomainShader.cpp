@@ -12,6 +12,8 @@ namespace LLGL
 {
 
 
+LLGL_DEPRECATED_IGNORE_PUSH()
+
 D3D11DomainShader::D3D11DomainShader(ID3D11Device* device, const ShaderDescriptor& desc) :
     D3D11Shader { desc.type }
 {
@@ -19,11 +21,13 @@ D3D11DomainShader::D3D11DomainShader(ID3D11Device* device, const ShaderDescripto
     {
         /* Build optional proxy geometry shader if there are any output attributes */
         if (!desc.vertex.outputAttribs.empty())
-            BuildProxyGeometryShader(device, desc, proxyGeomtryShader_);
+            BuildProxyGeometryShader(device, desc, proxyGeometryShader_);
     }
     if (desc.debugName != nullptr)
         SetDebugName(desc.debugName);
 }
+
+LLGL_DEPRECATED_IGNORE_POP()
 
 
 } // /namespace LLGL

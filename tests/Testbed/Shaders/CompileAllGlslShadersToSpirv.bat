@@ -1,13 +1,18 @@
 @echo off
 
 glslangValidator -V -DENABLE_SPIRV=1 -o TriangleMesh\TriangleMesh.450core.vert.spv TriangleMesh\TriangleMesh.450core.vert
+glslangValidator -V -DENABLE_SPIRV=1 -DIS_INSTANCED=1 -o TriangleMesh\TriangleMesh.Instanced.450core.vert.spv TriangleMesh\TriangleMesh.450core.vert
 glslangValidator -V -DENABLE_SPIRV=1 -o TriangleMesh\TriangleMesh.450core.frag.spv TriangleMesh\TriangleMesh.450core.frag
-glslangValidator -V -DENABLE_SPIRV=1 -DENABLE_TEXTURING=1 -o TriangleMesh\TriangleMesh.Textured.450core.vert.spv TriangleMesh\TriangleMesh.450core.vert
-glslangValidator -V -DENABLE_SPIRV=1 -DENABLE_TEXTURING=1 -o TriangleMesh\TriangleMesh.Textured.450core.frag.spv TriangleMesh\TriangleMesh.450core.frag
+glslangValidator -V -DENABLE_SPIRV=1 -DNUM_TEXTURES=1 -o TriangleMesh\TriangleMesh.Textured.450core.vert.spv TriangleMesh\TriangleMesh.450core.vert
+glslangValidator -V -DENABLE_SPIRV=1 -DNUM_TEXTURES=1 -o TriangleMesh\TriangleMesh.Textured.450core.frag.spv TriangleMesh\TriangleMesh.450core.frag
+glslangValidator -V -DENABLE_SPIRV=1 -DNUM_TEXTURES=8 -o TriangleMesh\TriangleMesh.Textured8.450core.vert.spv TriangleMesh\TriangleMesh.450core.vert
+glslangValidator -V -DENABLE_SPIRV=1 -DNUM_TEXTURES=8 -o TriangleMesh\TriangleMesh.Textured8.450core.frag.spv TriangleMesh\TriangleMesh.450core.frag
 glslangValidator -V -DENABLE_SPIRV=1 -o UnprojectedMesh\UnprojectedMesh.450core.vert.spv UnprojectedMesh\UnprojectedMesh.450core.vert
 glslangValidator -V -DENABLE_SPIRV=1 -o UnprojectedMesh\UnprojectedMesh.450core.frag.spv UnprojectedMesh\UnprojectedMesh.450core.frag
 glslangValidator -V -DENABLE_SPIRV=1 -o DualSourceBlending\DualSourceBlending.450core.vert.spv DualSourceBlending\DualSourceBlending.450core.vert
 glslangValidator -V -DENABLE_SPIRV=1 -o DualSourceBlending\DualSourceBlending.450core.frag.spv DualSourceBlending\DualSourceBlending.450core.frag
+glslangValidator -V -DENABLE_SPIRV=1 -o AlphaOnlyTexture\AlphaOnlyTexture.450core.vert.spv AlphaOnlyTexture\AlphaOnlyTexture.450core.vert
+glslangValidator -V -DENABLE_SPIRV=1 -o AlphaOnlyTexture\AlphaOnlyTexture.450core.frag.spv AlphaOnlyTexture\AlphaOnlyTexture.450core.frag
 glslangValidator -V -DENABLE_SPIRV=1 -o DynamicTriangleMesh\DynamicTriangleMesh.450core.vert.spv DynamicTriangleMesh\DynamicTriangleMesh.450core.vert
 glslangValidator -V -DENABLE_SPIRV=1 -o DynamicTriangleMesh\DynamicTriangleMesh.450core.frag.spv DynamicTriangleMesh\DynamicTriangleMesh.450core.frag
 glslangValidator -V -DENABLE_SPIRV=1 -o ShadowMapping\ShadowMapping.VShadow.450core.vert.spv ShadowMapping\ShadowMapping.VShadow.450core.vert
@@ -33,6 +38,11 @@ glslangValidator -V -DENABLE_SPIRV=1 -o ReadAfterWrite\ReadAfterWrite.450core.co
 glslangValidator -V -o VertexFormats\VertexFormats.Format0.450core.vert.spv VertexFormats\VertexFormats.450core.vert
 glslangValidator -V -DVERTEX_FORMAT=1 -o VertexFormats\VertexFormats.Format1.450core.vert.spv VertexFormats\VertexFormats.450core.vert
 glslangValidator -V -o VertexFormats\VertexFormats.450core.frag.spv VertexFormats\VertexFormats.450core.frag
+glslangValidator -V --target-env vulkan1.2 -DENABLE_SPIRV=1 -o Meshlet\Meshlet.450core.mesh.spv Meshlet\Meshlet.450core.mesh
+glslangValidator -V -DENABLE_SPIRV=1 -o Meshlet\Meshlet.450core.frag.spv Meshlet\Meshlet.450core.frag
+glslangValidator -V -DENABLE_SPIRV=1 -o Multiview\Multiview.450core.vert.spv Multiview\Multiview.450core.vert
+glslangValidator -V -DENABLE_SPIRV=1 -o Multiview\Multiview.450core.frag.spv Multiview\Multiview.450core.frag
 
 echo DONE
+
 pause

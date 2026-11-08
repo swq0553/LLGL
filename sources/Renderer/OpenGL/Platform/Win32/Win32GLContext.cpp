@@ -147,6 +147,7 @@ Win32GLContext::Win32GLContext(
         /* Create default WGL context */
         CreateWGLContext(surface);
     }
+    DetermineDeviceVendor();
 }
 
 Win32GLContext::~Win32GLContext()
@@ -277,13 +278,20 @@ void Win32GLContext::CreateWGLContext(Surface& surface, Win32GLContext* sharedCo
         {
             if (HGLRC extRenderContext = CreateExplicitWGLContext(hDC_, sharedContext))
             {
+                /*
+                Unset current WGL context to prevent issues with RenderDoc or other API hooks
+                that would deleted shared resources that are still needed for the new extended WGL context.
+                The new WGL context is made current again below.
+                */
+                MakeWGLContextCurrent(hDC_, nullptr);
+
                 /* Use the extended profile and delete the old standard render context */
                 DeleteWGLContext(hGLRC_);
                 hGLRC_ = extRenderContext;
             }
             else
             {
-                /* Print warning and disbale profile selection */
+                /* Print warning and disable profile selection */
                 Log::Errorf("failed to create extended OpenGL profile");
                 profile_.contextProfile = OpenGLContextProfile::CompatibilityProfile;
             }
@@ -359,6 +367,7 @@ HGLRC Win32GLContext::CreateExplicitWGLContext(HDC hDC, Win32GLContext* sharedCo
     /* Set up context flags */
     int contextFlags = 0;
 
+    //TODO: make this dependent on RenderSystemFlags::DebugDevice instead of LLGL_DEBUG macro!
     #ifdef LLGL_DEBUG
     contextFlags |= WGL_CONTEXT_DEBUG_BIT_ARB;
     #endif
@@ -370,7 +379,7 @@ HGLRC Win32GLContext::CreateExplicitWGLContext(HDC hDC, Win32GLContext* sharedCo
         WGL_CONTEXT_MINOR_VERSION_ARB,  minor,
         WGL_CONTEXT_FLAGS_ARB,          contextFlags,
         WGL_CONTEXT_PROFILE_MASK_ARB,   GLContextProfileToBitmask(profile_.contextProfile),
-        0, 0
+        0 // Array terminator
     };
 
     /* Get shared WGL context */

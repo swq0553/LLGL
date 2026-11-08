@@ -15,7 +15,8 @@
 #include <LLGL/ForwardDecls.h>
 #include <LLGL/Constants.h>
 #include <LLGL/Container/DynamicVector.h>
-#include <vector>
+#include <LLGL/Deprecated.h>
+#include <LLGL/VertexAttribute.h>
 #include <cstdint>
 
 
@@ -516,7 +517,10 @@ struct StencilDescriptor
     StencilFaceDescriptor   back;
 };
 
-//! Depth bias descriptor structure to control fragment depth values.
+/**
+\brief Depth bias descriptor structure to control fragment depth values.
+\see RasterizerDescriptor::depthBias
+*/
 struct DepthBiasDescriptor
 {
     /**
@@ -543,7 +547,11 @@ struct DepthBiasDescriptor
 */
 struct RasterizerDescriptor
 {
-    //! Polygon render mode. By default PolygonMode::Fill.
+    /**
+    \brief Polygon render mode. By default PolygonMode::Fill.
+    \note On WebGL 2, if depth-bias is used (i.e. DepthBiasDescriptor::constantFactor or DepthBiasDescriptor::slopeFactor is non-zero), then this \b must be PolygonMode::Fill.
+    \see https://developer.mozilla.org/en-US/docs/Web/API/WebGLRenderingContext/polygonOffset
+    */
     PolygonMode         polygonMode                 = PolygonMode::Fill;
 
     //! Polygon face culling mode. By default CullMode::Disabled.
@@ -551,6 +559,15 @@ struct RasterizerDescriptor
 
     //! Specifies the parameters to bias fragment depth values.
     DepthBiasDescriptor depthBias;
+
+    /**
+    \brief Specifies the width of all generated line primitives. By default 1.0.
+    \remarks The minimum and maximum supported line width can be determined by the \c lineWidthRange member in the RenderingCapabilities structure.
+    If this line width is out of range, it will be clamped silently during graphics pipeline creation.
+    \note Only supported with: OpenGL, Vulkan.
+    \see RenderingLimits::lineWidthRange
+    */
+    float               lineWidth                   = 1.0f;
 
     //! If enabled, front facing polygons are in counter-clock-wise winding, otherwise in clock-wise winding. By default disabled.
     bool                frontCCW                    = false;
@@ -571,7 +588,11 @@ struct RasterizerDescriptor
     */
     bool                scissorTestEnabled          = false;
 
-    //! Specifies whether multi-sampling is enabled or disabled. By default disabled.
+    /**
+    \brief Specifies whether multi-sampling is enabled or disabled. By default disabled.
+    \todo Remove this! This information must be provided by the render-pass.
+    If this mismatches the multisampling state of the render-pass, Vulkan corrupts the viewport extent.
+    */
     bool                multiSampleEnabled          = false;
 
     //! Specifies whether lines are rendered with or without anti-aliasing. By default disabled.
@@ -592,13 +613,13 @@ struct RasterizerDescriptor
     bool                conservativeRasterization   = false;
 
     /**
-    \brief Specifies the width of all generated line primitives. By default 1.0.
-    \remarks The minimum and maximum supported line width can be determined by the \c lineWidthRange member in the RenderingCapabilities structure.
-    If this line width is out of range, it will be clamped silently during graphics pipeline creation.
-    \note Only supported with: OpenGL, Vulkan.
-    \see RenderingLimits::lineWidthRange
+    \brief If true, variable rate shading (VRS) is enabled for the rasterizer. By default disabled.
+    \remarks If enabled, a shading rate must be specified before the first draw command.
+    \note Only supported with: Direct3D 12, Vulkan.
+    \see CommandBufferTier1::SetShadingRate
+    \see RenderingFeatures::hasVariableRateShading
     */
-    float               lineWidth                   = 1.0f;
+    bool                shadingRateEnabled          = false;
 };
 
 /**
@@ -609,6 +630,13 @@ struct BlendTargetDescriptor
 {
     //! Specifies whether blending is enabled or disabled for the respective color attachment.
     bool            blendEnabled    = false;
+
+    /**
+    \brief Specifies which color components are enabled for writing. By default LLGL::ColorMaskFlags::All to enable all components.
+    \remarks If no pixel shader is used in the graphics pipeline,
+    the color mask \b must be set to LLGL::ColorMaskFlags::Zero (or 0) to disable rasterizer output. Otherwise, the behavior is undefined.
+    */
+    std::uint8_t    colorMask       = LLGL::ColorMaskFlags::All;
 
     //! Source color blending operation. By default BlendOp::SrcAlpha.
     BlendOp         srcColor        = BlendOp::SrcAlpha;
@@ -633,13 +661,6 @@ struct BlendTargetDescriptor
 
     //! Alpha blending arithmetic. By default BlendArithmetic::Add.
     BlendArithmetic alphaArithmetic = BlendArithmetic::Add;
-
-    /**
-    \brief Specifies which color components are enabled for writing. By default LLGL::ColorMaskFlags::All to enable all components.
-    \remarks If no pixel shader is used in the graphics pipeline,
-    the color mask \b must be set to LLGL::ColorMaskFlags::Zero (or 0) to disable rasterizer output. Otherwise, the behavior is undefined.
-    */
-    std::uint8_t    colorMask       = LLGL::ColorMaskFlags::All;
 };
 
 
@@ -664,6 +685,14 @@ struct BlendDescriptor
     \see targets
     */
     bool                    independentBlendEnabled = false;
+
+    /**
+    \brief Specifies whether the blend factor will be set dynamically with the command buffer. By default false.
+    \remarks If this is true, \c blendFactor is ignored
+    and the blending factors must be set with the \c SetBlendFactor function everytime the graphics pipeline is set.
+    \see CommandBuffer::SetBlendFactor
+    */
+    bool                    blendFactorDynamic      = false;
 
     /**
     \brief Specifies the sample bitmask if alpha coverage is enabled. By default \c 0xFFFFFFFF.
@@ -692,14 +721,6 @@ struct BlendDescriptor
     \see CommandBuffer::SetBlendFactor
     */
     float                   blendFactor[4]          = { 0.0f, 0.0f, 0.0f, 0.0f };
-
-    /**
-    \brief Specifies whether the blend factor will be set dynamically with the command buffer. By default false.
-    \remarks If this is true, \c blendFactor is ignored
-    and the blending factors must be set with the \c SetBlendFactor function everytime the graphics pipeline is set.
-    \see CommandBuffer::SetBlendFactor
-    */
-    bool                    blendFactorDynamic      = false;
 
     /**
     \brief Render-target blend states for the respective color attachments. A maximum of 8 targets is supported.
@@ -756,9 +777,9 @@ struct GraphicsPipelineDescriptor
     /**
     \brief Optional name for debugging purposes. By default null.
     \remarks The final name of the native hardware resource is implementation defined.
-    \see RenderSystemChild::SetName
+    \see RenderSystemChild::SetDebugName
     */
-    const char*             debugName               = nullptr;
+    const char*                      debugName               = nullptr;
 
     /**
     \brief Specifies an optional pipeline layout for the graphics pipeline. By default null.
@@ -766,7 +787,7 @@ struct GraphicsPipelineDescriptor
     If this is null, a default layout will be used that is only compatible with graphics pipelines that have no binding points, i.e. no input/output buffers or textures.
     \see RenderSystem::CreatePipelineLayout
     */
-    const PipelineLayout*   pipelineLayout          = nullptr;
+    const PipelineLayout*            pipelineLayout          = nullptr;
 
     /**
     \brief Specifies an optional render pass. By default null.
@@ -775,34 +796,54 @@ struct GraphicsPipelineDescriptor
     \see CommandBuffer::BeginRenderPass
     \see RenderSystem::CreateRenderPass
     */
-    const RenderPass*       renderPass              = nullptr;
+    const RenderPass*                renderPass              = nullptr;
+
+    /**
+    \brief Vertex input attributes.
+    \remarks In previous versions of LLGL, vertex attributes were tied to both the vertex shader and vertex buffer. The new API makes them part of the graphics PSO only.
+    This reduces the declaration to a single point of truth and also allows a vertex buffer to be used with different vertex formats.
+    */
+    DynamicVector<VertexAttribute>   inputVertexAttribs;
+
+    /**
+    \brief Vertex (or geometry or tessellation-evaluation) shader stream-output attributes.
+    \remarks The binding slot of each output vertex attribute must be less than \c LLGL_MAX_NUM_SO_BUFFERS.
+    \remarks Stream-output attributes can only have 32-bit floating-point formats, i.e. only the following formats are supported:
+    - Format::R32Float
+    - Format::RG32Float
+    - Format::RGB32Float
+    - Format::RGBA32Float
+    \see RenderingFeatures::hasStreamOutputs
+    \see CommandBuffer::BeginStreamOutput
+    */
+    DynamicVector<VertexAttribute>   outputVertexAttribs;
 
     /**
     \brief Specifies the vertex shader.
     \remarks Each graphics pipeline must have at least a vertex shader. Therefore, this must never be null when a graphics PSO is created.
     With OpenGL, this shader may also have a stream output.
     */
-    Shader*                 vertexShader            = nullptr;
+    Shader*                          vertexShader            = nullptr;
 
     /**
     \brief Specifies the tessellation-control shader (also referred to as "Hull Shader").
     \remarks If this is used, the counter part must also be specified, i.e. \c tessEvaluationShader.
     \see tessEvaluationShader
     */
-    Shader*                 tessControlShader       = nullptr;
+    Shader*                          tessControlShader       = nullptr;
 
     /**
     \brief Specifies the tessellation-evaluation shader (also referred to as "Domain Shader").
     \remarks If this is used, the counter part must also be specified, i.e. \c tessControlShader.
     \see tessControlShader
     */
-    Shader*                 tessEvaluationShader    = nullptr;
+    Shader*                          tessEvaluationShader    = nullptr;
 
     /**
     \brief Specifies an optional geometry shader.
     \remarks This shader may also have a stream output.
     */
-    Shader*                 geometryShader          = nullptr;
+    Shader*                          geometryShader          = nullptr;
 
     /**
     \brief Specifies an optional fragment shader (also referred to as "Pixel Shader").
@@ -810,7 +851,7 @@ struct GraphicsPipelineDescriptor
     and only the stream-output functionality as well as depth writes are used by either the vertex or geometry shader.
     If a depth buffer is attached to the current render target, omitting the fragment shader can be utilized to render a standard shadow map.
     */
-    Shader*                 fragmentShader          = nullptr;
+    Shader*                          fragmentShader          = nullptr;
 
     /**
     \brief Specifies the index buffer format. This can either be Format::Undefined, Format::R16UInt, or Format::R32UInt. By default Format::Undefined.
@@ -820,17 +861,17 @@ struct GraphicsPipelineDescriptor
     some backends might generate two internal PSOs if the index format is undefined.
     For instance, the D3D12 backend needs to specify the strip index cut value for either 16 or 32 bit indices at PSO creation time.
     For performance reasons, it is therefore recommended to set this value to either Format::R16UInt or Format::R32UInt
-    when the primitive toplogy is one of the aforementioned types.
+    when the primitive topology is one of the aforementioned types.
     \see CommandBuffer::DrawIndexed
     \see CommandBuffer::DrawIndexedInstanced
     */
-    Format                  indexFormat             = Format::Undefined;
+    Format                           indexFormat             = Format::Undefined;
 
     /**
     \brief Specifies the primitive topology and ordering of the primitive data. By default PrimitiveTopology::TriangleList.
     \see PrimitiveTopology
     */
-    PrimitiveTopology       primitiveTopology       = PrimitiveTopology::TriangleList;
+    PrimitiveTopology                primitiveTopology       = PrimitiveTopology::TriangleList;
 
     /**
     \brief Specifies an optional list of static viewports. If empty, the viewports must be set dynamically with the command buffer.
@@ -838,7 +879,7 @@ struct GraphicsPipelineDescriptor
     \see CommandBuffer::SetViewport
     \see CommandBuffer::SetViewports
     */
-    std::vector<Viewport>   viewports;
+    DynamicVector<Viewport>          viewports;
 
     /**
     \brief Specifies an optional list of static scissor rectangles. If empty, the scissors must be set dynamically with the command buffer.
@@ -846,19 +887,19 @@ struct GraphicsPipelineDescriptor
     \see CommandBuffer::SetScissor
     \see CommandBuffer::SetScissors
     */
-    std::vector<Scissor>    scissors;
+    DynamicVector<Scissor>           scissors;
 
     //! Specifies the depth state for the depth-stencil stage.
-    DepthDescriptor         depth;
+    DepthDescriptor                  depth;
 
     //! Specifies the stencil state for the depth-stencil stage.
-    StencilDescriptor       stencil;
+    StencilDescriptor                stencil;
 
     //! Specifies the state for the rasterizer stage.
-    RasterizerDescriptor    rasterizer;
+    RasterizerDescriptor             rasterizer;
 
     //! Specifies the state descriptor for the blend stage.
-    BlendDescriptor         blend;
+    BlendDescriptor                  blend;
 
     /**
     \brief Specifies the tessellation pipeline state.
@@ -866,7 +907,7 @@ struct GraphicsPipelineDescriptor
     All other backends ignore this member silently.
     \note Only supported with: Metal.
     */
-    TessellationDescriptor  tessellation;
+    TessellationDescriptor           tessellation;
 };
 
 /**
@@ -878,7 +919,7 @@ struct ComputePipelineDescriptor
     /**
     \brief Optional name for debugging purposes. By default null.
     \remarks The final name of the native hardware resource is implementation defined.
-    \see RenderSystemChild::SetName
+    \see RenderSystemChild::SetDebugName
     */
     const char*             debugName       = nullptr;
 
@@ -907,17 +948,24 @@ Only the fragment shader remains from the traditional PSO.
 */
 struct MeshPipelineDescriptor
 {
+    // Silence deprecation warnings in default constructors until `amplificationShader` is removed.
+    LLGL_DEPRECATED_IGNORE_PUSH()
+    inline MeshPipelineDescriptor() = default;
+    inline MeshPipelineDescriptor(const MeshPipelineDescriptor&) = default;
+    inline MeshPipelineDescriptor& operator = (const MeshPipelineDescriptor&) = default;
+    LLGL_DEPRECATED_IGNORE_POP()
+
     /**
     \brief Optional name for debugging purposes. By default null.
     \remarks The final name of the native hardware resource is implementation defined.
-    \see RenderSystemChild::SetName
+    \see RenderSystemChild::SetDebugName
     */
     const char*             debugName               = nullptr;
 
     /**
     \brief Specifies an optional pipeline layout for the graphics pipeline. By default null.
     \remarks This layout determines at which slots buffer resources will be bound.
-    If this is null, a default layout will be used that is only compatible with graphics pipelines that have no binding points, i.e. no input/output buffers or textures.
+    If this is null, a default layout will be used that is only compatible with mesh pipelines that have no binding points, i.e. no input/output buffers or textures.
     \see RenderSystem::CreatePipelineLayout
     */
     const PipelineLayout*   pipelineLayout          = nullptr;
@@ -932,9 +980,13 @@ struct MeshPipelineDescriptor
     const RenderPass*       renderPass              = nullptr;
 
     /**
-    \brief Specifies an optional amplification shader.
+    \brief Specifies an optional task shader.
     \remarks This is optional to further optimize the PSO.
     */
+    Shader*                 taskShader              = nullptr;
+
+    //! \deprecated Since 0.05b; Use taskShader instead!
+    LLGL_DEPRECATED("Identifier `amplificationShader` is deprecated since 0.05b; Use `taskShader` instead!", "taskShader")
     Shader*                 amplificationShader     = nullptr;
 
     /**

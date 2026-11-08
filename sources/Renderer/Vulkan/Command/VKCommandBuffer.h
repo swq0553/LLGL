@@ -9,16 +9,19 @@
 #define LLGL_VK_COMMAND_BUFFER_H
 
 
-#include <LLGL/CommandBuffer.h>
+#include <LLGL/CommandBufferTier1.h>
+#include "VKCommandBufferRing.h"
 #include "../Vulkan.h"
 #include "../VKPtr.h"
 #include "../VKCore.h"
 #include "VKCommandContext.h"
+#include "VKCommandQueue.h"
 #include "../Memory/VKDeviceMemoryManager.h"
 #include "../Buffer/VKStagingBufferPool.h"
 #include "../RenderState/VKStagingDescriptorSetPool.h"
 #include "../RenderState/VKDescriptorCache.h"
 #include "../RenderState/VKPipelineLayout.h"
+#include "../RenderState/VKQueryHeap.h"
 #include <vector>
 
 
@@ -34,37 +37,28 @@ class VKSwapChain;
 class VKPipelineState;
 class VKPipelineBarrier;
 
-class VKCommandBuffer final : public CommandBuffer
+class VKCommandBuffer final : public CommandBufferTier1
 {
 
     public:
 
-        #include <LLGL/Backend/CommandBuffer.inl>
+        #include <LLGL/Backend/CommandBufferTier1.inl>
 
     public:
 
         VKCommandBuffer(
             const VKPhysicalDevice&         physicalDevice,
             VkDevice                        device,
-            VkQueue                         commandQueue,
+            const VKSharedCommandQueueSPtr& sharedCmdQueue,
             VKDeviceMemoryManager&          deviceMemoryMngr,
             const VKQueueFamilyIndices&     queueFamilyIndices,
             const CommandBufferDescriptor&  desc
         );
 
-        ~VKCommandBuffer();
-
     public:
 
-        // Returns the fence used to submit the command buffer and resets it if this is a multi-submit command buffer,
-        // i.e. it won't need another signal for the next submission.
-        VkFence GetQueueSubmitFenceAndFlush();
-
-        // Returns the native VkCommandBuffer object.
-        inline VkCommandBuffer GetVkCommandBuffer() const
-        {
-            return commandBuffer_;
-        }
+        // Submits this command buffer to the specified queue. This might include another command buffer that is submitted alongside to reset query pools.
+        VkResult SubmitToQueue(VKSharedCommandQueue& cmdQueue);
 
         // Returns true if this is an immediate command buffer, otherwise it is a deferred command buffer.
         inline bool IsImmediateCmdBuffer() const
@@ -90,9 +84,6 @@ class VKCommandBuffer final : public CommandBuffer
 
     private:
 
-        void CreateVkCommandPool(std::uint32_t queueFamilyIndex);
-        void CreateVkCommandBuffers();
-        void CreateVkRecordingFences();
         void CreateStagingBufferPools(VKDeviceMemoryManager& deviceMemoryMngr, VkDeviceSize minStagingPoolSize);
 
         void ClearFramebufferAttachments(std::uint32_t numAttachments, const VkClearAttachment* attachments);
@@ -126,19 +117,19 @@ class VKCommandBuffer final : public CommandBuffer
         // Acquires the next native VkCommandBuffer object.
         void AcquireNextBuffer();
 
-        void ResetBindingStates();
+        void ResetRecordStatesBegin();
+        void ResetRecordStatesEnd();
 
-        #if 1//TODO: optimize
-        void ResetQueryPoolsInFlight();
-        void AppendQueryPoolInFlight(VKQueryHeap* queryHeap);
-        #endif
+        void BindVertexBuffer(VKBuffer& bufferVK, VkDeviceSize offset = 0);
 
-        void BindVertexBuffer(VKBuffer& bufferVK);
+        // Enqueues a command to reset a query pool in a separate command buffer.
+        void CmdResetQueryPool(VkQueryPool queryPool, std::uint32_t firstQuery, std::uint32_t queryCount);
+        void FinishResetQueryCommands();
 
-    private:
-
-        // Returns the number of native Vulkan command buffers used for the specified descriptor.
-        static std::uint32_t GetNumVkCommandBuffers(const CommandBufferDescriptor& desc);
+        inline VKStagingBufferPool& GetStagingBufferPool()
+        {
+            return stagingBufferPools_[commandBufferRing_.GetIndex()];
+        }
 
     private:
 
@@ -157,27 +148,23 @@ class VKCommandBuffer final : public CommandBuffer
             std::uint32_t   numXfbBuffers                               = 0;
         };
 
-    private:
+        struct ActiveQuery : VKQueryAlias
+        {
+            std::uint32_t refCount = 0;
+        };
 
-        static constexpr std::uint32_t maxNumCommandBuffers = 3;
+    private:
 
         VkDevice                        device_                                         = VK_NULL_HANDLE;
 
-        VkQueue                         commandQueue_                                   = VK_NULL_HANDLE;
+        VKSharedCommandQueueSPtr        sharedCmdQueue_;
 
-        VKPtr<VkCommandPool>            commandPool_;
-
-        VKPtr<VkFence>                  recordingFenceArray_[maxNumCommandBuffers];
-        VkFence                         recordingFence_                                 = VK_NULL_HANDLE;
-        bool                            recordingFenceDirty_[maxNumCommandBuffers]      = {};
-        VkCommandBuffer                 commandBufferArray_[maxNumCommandBuffers];
+        VKCommandBufferRing             commandBufferRing_;
         VkCommandBuffer                 commandBuffer_                                  = VK_NULL_HANDLE;
-        std::uint32_t                   commandBufferIndex_                             = 0;
-        std::uint32_t                   numCommandBuffers_                              = 2;
 
         VKCommandContext                context_;
 
-        VKStagingBufferPool             stagingBufferPools_[maxNumCommandBuffers];
+        VKStagingBufferPool             stagingBufferPools_[VKCommandBufferRing::maxCount];
 
         RecordState                     recordState_                                    = RecordState::Undefined;
 
@@ -193,7 +180,8 @@ class VKCommandBuffer final : public CommandBuffer
         VkFramebuffer                   framebuffer_                                    = VK_NULL_HANDLE; // active framebuffer handle
         VkRect2D                        framebufferRenderArea_                          = { { 0, 0 }, { 0, 0 } };
         std::uint32_t                   numColorAttachments_                            = 0;
-        bool                            hasDepthStencilAttachment_                      = false;
+        bool                            hasDepthAttachment_                             = false;
+        bool                            hasStencilAttachment_                           = false;
         VkSubpassContents               subpassContents_                                = VK_SUBPASS_CONTENTS_INLINE;
 
         std::uint32_t                   queuePresentFamily_                             = 0;
@@ -207,18 +195,18 @@ class VKCommandBuffer final : public CommandBuffer
 
         std::uint32_t                   maxDrawIndirectCount_                           = 0;
 
-        VKStagingDescriptorSetPool      descriptorSetPoolArray_[maxNumCommandBuffers];
+        VKStagingDescriptorSetPool      descriptorSetPoolArray_[VKCommandBufferRing::maxCount];
         VKStagingDescriptorSetPool*     descriptorSetPool_                              = nullptr;
         VKDescriptorCache*              descriptorCache_                                = nullptr;
         VKDescriptorSetWriter           descriptorSetWriter_;
 
+        bool                            isAnyQueryReset_                                = false;
+        VKPtr<VkEvent>                  resetQueryEvents_[VKCommandBufferRing::maxCount];
+
         InputAssemblyState              iaState_;
         TransformFeedbackState          xfbState_;
 
-        #if 0//TODO: optimize usage of query pools
-        std::vector<VKQueryHeap*>       queryHeapsInFlight_;
-        std::size_t                     numQueryHeapsInFlight_                          = 0;
-        #endif
+        ActiveQuery                     activeQueries_[VKQueryHeap::PoolType_Num]       = {};
 
 };
 

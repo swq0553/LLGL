@@ -39,7 +39,7 @@ class Example_ShadowMapping : public ExampleBase
     float                       spotLightAngle          = 35.0f;
     Gs::Vector3f                lightOffset             = { 0, 1.5f, 0 };
 
-    struct Settings
+    struct alignas(16) Settings
     {
         Gs::Matrix4f            wMatrix;
         Gs::Matrix4f            vpMatrix;
@@ -57,79 +57,38 @@ public:
     {
         // Create all graphics objects
         CreateShadowMap();
-        auto vertexFormat = CreateBuffers();
-        LoadShaders(vertexFormat);
+        CreateBuffers();
+        LoadShaders();
         CreatePipelineLayouts();
         CreatePipelines();
         CreateResourceHeaps();
 
-        #if 0
-        // Show some information
-        LLGL::Log::Printf(
-            "press LEFT MOUSE BUTTON and move the mouse on the X-axis to rotate the OUTER cube\n"
-            "press RIGHT MOUSE BUTTON and move the mouse on the X-axis to rotate the INNER cube\n"
-            "press RETURN KEY to save the render target texture to a PNG file\n"
-        );
-        #endif
+        // Update vectors for projection
+        settings.lightDir.z *= GetProjectionZAxis();
     }
 
 private:
 
-    LLGL::VertexFormat CreateBuffers()
+    void CreateBuffers()
     {
-        // Specify vertex format
-        LLGL::VertexFormat vertexFormat;
-        vertexFormat.AppendAttribute({ "position", LLGL::Format::RGB32Float });
-        vertexFormat.AppendAttribute({ "normal",   LLGL::Format::RGB32Float });
-        vertexFormat.SetStride(sizeof(TexturedVertex));
-
         // Load 3D models
         std::vector<TexturedVertex> vertices;
-        meshes.push_back(LoadObjModel(vertices, "SimpleRoom.obj"));
-        meshes.push_back(LoadObjModel(vertices, "WiredBox.obj"));
+        meshes.push_back(Load3DModel(vertices, "SimpleRoom.obj"));
+        meshes.push_back(Load3DModel(vertices, "WiredBox.obj"));
 
         meshes[1].color = { 0.4f, 0.5f, 1.0f };
 
         // Create vertex, index, and constant buffer
-        vertexBuffer = CreateVertexBuffer(vertices, vertexFormat);
+        vertexBuffer = CreateVertexBuffer(vertices, sizeof(TexturedVertex));
         constantBuffer = CreateConstantBuffer(settings);
-
-        return vertexFormat;
     }
 
-    void LoadShaders(const LLGL::VertexFormat& vertexFormat)
+    void LoadShaders()
     {
         // Load shader program
-        if (Supported(LLGL::ShadingLanguage::GLSL) || Supported(LLGL::ShadingLanguage::ESSL))
-        {
-            vsShadowMap = LoadShaderAndPatchClippingOrigin({ LLGL::ShaderType::Vertex, "ShadowMap.vert" }, { vertexFormat });
-
-            vsScene     = LoadShader({ LLGL::ShaderType::Vertex,   "Scene.vert" }, { vertexFormat });
-            fsScene     = LoadShader({ LLGL::ShaderType::Fragment, "Scene.frag" });
-        }
-        else if (Supported(LLGL::ShadingLanguage::SPIRV))
-        {
-            vsShadowMap = LoadShader({ LLGL::ShaderType::Vertex, "ShadowMap.450core.vert.spv" }, { vertexFormat });
-
-            vsScene = LoadShader({ LLGL::ShaderType::Vertex,   "Scene.450core.vert.spv" }, { vertexFormat });
-            fsScene = LoadShader({ LLGL::ShaderType::Fragment, "Scene.450core.frag.spv" });
-        }
-        else if (Supported(LLGL::ShadingLanguage::HLSL))
-        {
-            vsShadowMap = LoadShader({ LLGL::ShaderType::Vertex, "Example.hlsl", "VShadowMap", "vs_5_0" }, { vertexFormat });
-
-            vsScene = LoadShader({ LLGL::ShaderType::Vertex,   "Example.hlsl", "VScene", "vs_5_0" }, { vertexFormat });
-            fsScene = LoadShader({ LLGL::ShaderType::Fragment, "Example.hlsl", "PScene", "ps_5_0" });
-        }
-        else if (Supported(LLGL::ShadingLanguage::Metal))
-        {
-            vsShadowMap = LoadShader({ LLGL::ShaderType::Vertex, "Example.metal", "VShadowMap", "1.1" }, { vertexFormat });
-
-            vsScene = LoadShader({ LLGL::ShaderType::Vertex,   "Example.metal", "VScene", "1.1" }, { vertexFormat });
-            fsScene = LoadShader({ LLGL::ShaderType::Fragment, "Example.metal", "PScene", "1.1" });
-        }
-        else
-            LLGL_THROW_RUNTIME_ERROR("shaders not supported for active renderer");
+        vsShadowMap = LoadVertexShader  ("Example", "VShadowMap", nullptr, LLGL::ShaderCompileFlags::PatchClippingOrigin);
+        vsScene     = LoadVertexShader  ("Example", "VScene");
+        fsScene     = LoadFragmentShader("Example", "PScene");
     }
 
     void CreateShadowMap()
@@ -209,7 +168,7 @@ private:
             };
             sceneLayoutDesc.combinedTextureSamplers =
             {
-                LLGL::CombinedTextureSamplerDescriptor{ "shadowMap", "shadowMap", "shadowMapSampler", 2 }
+                LLGL::CombinedTextureSamplerDescriptor{ "s_shadowMapshadowMapSampler", "shadowMap", "shadowMapSampler", 2 }
             };
         }
         pipelineLayoutScene = renderer->CreatePipelineLayout(sceneLayoutDesc);
@@ -217,10 +176,18 @@ private:
 
     void CreatePipelines()
     {
+        // Specify vertex format
+        const LLGL::VertexAttribute vertexAttribs[] =
+        {
+            LLGL::VertexAttribute{ "position", LLGL::Format::RGB32Float, 0, offsetof(TexturedVertex, position), sizeof(TexturedVertex) },
+            LLGL::VertexAttribute{ "normal",   LLGL::Format::RGB32Float, 1, offsetof(TexturedVertex, normal  ), sizeof(TexturedVertex) },
+        };
+
         // Create graphics pipeline for shadow-map rendering
         {
             LLGL::GraphicsPipelineDescriptor pipelineDesc;
             {
+                pipelineDesc.inputVertexAttribs                     = vertexAttribs;
                 pipelineDesc.vertexShader                           = vsShadowMap;
                 pipelineDesc.renderPass                             = shadowMapRenderTarget->GetRenderPass();
                 pipelineDesc.pipelineLayout                         = pipelineLayoutShadowMap;
@@ -240,6 +207,7 @@ private:
         {
             LLGL::GraphicsPipelineDescriptor pipelineDesc;
             {
+                pipelineDesc.inputVertexAttribs             = vertexAttribs;
                 pipelineDesc.vertexShader                   = vsScene;
                 pipelineDesc.fragmentShader                 = fsScene;
                 pipelineDesc.renderPass                     = swapChain->GetRenderPass();
@@ -265,6 +233,8 @@ private:
 
     void UpdateScene()
     {
+        const float projZAxis = GetProjectionZAxis();
+
         // Update animation
         static float animation;
 
@@ -285,15 +255,15 @@ private:
         // Update model transform
         meshes[1].transform.LoadIdentity();
         Gs::Translate(meshes[1].transform, boxPosition);
-        Gs::RotateFree(meshes[1].transform, Gs::Vector3f(1.0f).Normalized(), Gs::Deg2Rad(animation));
+        Gs::RotateFree(meshes[1].transform, Gs::Vector3f(1, 1, projZAxis).Normalized(), Gs::Deg2Rad(animation) * projZAxis);
         Gs::Scale(meshes[1].transform, Gs::Vector3f(0.15f));
 
         // Update view transformation
         settings.vpMatrix.LoadIdentity();
         Gs::Translate(settings.vpMatrix, boxPosition);
-        Gs::RotateFree(settings.vpMatrix, { 0, 1, 0 }, Gs::Deg2Rad(viewRotation.y));
-        Gs::RotateFree(settings.vpMatrix, { 1, 0, 0 }, Gs::Deg2Rad(viewRotation.x));
-        Gs::Translate(settings.vpMatrix, { 0, 0, -viewDistanceToBox });
+        Gs::RotateFree(settings.vpMatrix, { 0, 1, 0 }, Gs::Deg2Rad(viewRotation.y) * projZAxis);
+        Gs::RotateFree(settings.vpMatrix, { 1, 0, 0 }, Gs::Deg2Rad(viewRotation.x) * projZAxis);
+        Gs::Translate(settings.vpMatrix, { 0, 0, -viewDistanceToBox * projZAxis });
         settings.vpMatrix.MakeInverse();
         settings.vpMatrix = projection * settings.vpMatrix;
 
@@ -302,7 +272,7 @@ private:
 
         settings.vpShadowMatrix.LoadIdentity();
         Gs::Translate(settings.vpShadowMatrix, boxPosition + lightOffset);
-        Gs::RotateFree(settings.vpShadowMatrix, { 1, 0, 0 }, Gs::Deg2Rad(-90.0f));
+        Gs::RotateFree(settings.vpShadowMatrix, { 1, 0, 0 }, Gs::Deg2Rad(-90.0f) * projZAxis);
         settings.vpShadowMatrix.MakeInverse();
         settings.vpShadowMatrix = lightProjection * settings.vpShadowMatrix;
     }
@@ -351,7 +321,7 @@ private:
         commands->EndRenderPass();
     }
 
-    void OnDrawFrame() override
+    void OnDrawFrame(float dt) override
     {
         // Update scene by user input
         UpdateScene();

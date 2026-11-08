@@ -33,6 +33,7 @@ type CommandBuffer interface {
 	SetScissor(scissor Scissor)
 	SetScissors(scissors []Scissor)
 	SetVertexBuffer(buffer Buffer)
+	SetVertexBufferExt(buffer Buffer, stride uint32, offset uint64)
 	SetVertexBufferArray(bufferArray BufferArray)
 	SetIndexBuffer(buffer Buffer)
 	SetIndexBufferExt(buffer Buffer, format Format, offset uint64)
@@ -143,7 +144,10 @@ func (self commandBufferImpl) SetViewport(viewport Viewport) {
 }
 
 func (self commandBufferImpl) SetViewports(viewports []Viewport) {
-	nativeViewports := (*C.LLGLViewport)(unsafe.Pointer(&viewports))
+	var nativeViewports *C.LLGLViewport
+	if len(viewports) > 0 {
+		nativeViewports = (*C.LLGLViewport)(unsafe.Pointer(&viewports[0]))
+	}
 	C.llglSetViewports(C.uint32_t(len(viewports)), nativeViewports)
 }
 
@@ -153,12 +157,19 @@ func (self commandBufferImpl) SetScissor(scissor Scissor) {
 }
 
 func (self commandBufferImpl) SetScissors(scissors []Scissor) {
-	nativeScissors := (*C.LLGLScissor)(unsafe.Pointer(&scissors))
+	var nativeScissors *C.LLGLScissor
+	if len(scissors) > 0 {
+		nativeScissors = (*C.LLGLScissor)(unsafe.Pointer(&scissors[0]))
+	}
 	C.llglSetScissors(C.uint32_t(len(scissors)), nativeScissors)
 }
 
 func (self commandBufferImpl) SetVertexBuffer(buffer Buffer) {
 	C.llglSetVertexBuffer(buffer.(bufferImpl).native)
+}
+
+func (self commandBufferImpl) SetVertexBufferExt(buffer Buffer, stride uint32, offset uint64) {
+	C.llglSetVertexBufferExt(buffer.(bufferImpl).native, C.uint32_t(stride), C.uint64_t(offset))
 }
 
 func (self commandBufferImpl) SetVertexBufferArray(bufferArray BufferArray) {

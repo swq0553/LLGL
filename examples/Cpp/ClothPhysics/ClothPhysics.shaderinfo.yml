@@ -1,0 +1,73 @@
+sources:
+  - source: "ClothPhysics.hlsl"
+    entries:
+      - entry: "VS"
+        profile: "vs_5_0"
+        targets: [glsl140core, glsl300es, spirv, metal]
+      - entry: "PS"
+        profile: "ps_5_0"
+        targets: [glsl140core, glsl300es, spirv, metal]
+
+      - entry: "CSForces"
+        profile: "cs_5_0"
+        targets: [glsl430core, glsl310es, spirv, metal]
+      - entry: "CSStretchConstraints"
+        optimize: 0 # Disable optimization for CSStretchConstraints to improve readability
+        profile: "cs_5_0"
+        targets: [glsl430core, glsl310es, spirv, metal]
+      - entry: "CSRelaxation"
+        profile: "cs_5_0"
+        targets: [glsl430core, glsl310es, spirv, metal]
+
+  - source: "ClothPhysics.hlsl"
+    permutation:
+      override: "RWTextures"
+      macros:
+        COMPUTE_MODE: 1
+    entries:
+      - entry: "VS"
+        profile: "vs_5_0"
+        targets: [glsl140core, spirv, metal]
+
+      - entry: "CSForces"
+        profile: "cs_5_0"
+        targets: [glsl430core, spirv, metal]
+      - entry: "CSStretchConstraints"
+        profile: "cs_5_0"
+        targets: [glsl430core, spirv, metal]
+      - entry: "CSRelaxation"
+        profile: "cs_5_0"
+        targets: [glsl430core, spirv, metal]
+
+  - source: "ClothPhysics.hlsl"
+    permutation:
+      override: "StreamOutput"
+      macros:
+        COMPUTE_MODE: 2
+    entries:
+      - entry: "VSForces"
+        profile: "vs_5_0"
+        targets: [glsl330core, spirv]
+      - entry: "VSStretchConstraints"
+        profile: "vs_5_0"
+        targets: [glsl330core, spirv]
+      - entry: "VSRelaxation"
+        profile: "vs_5_0"
+        targets: [glsl330core, spirv]
+
+  - source: "ClothPhysics.hlsl"
+    permutation:
+      override: "StreamOutput"
+      macros:
+        COMPUTE_MODE: 2
+        GL_ES: 1
+    entries:
+      - entry: "VSForces"
+        profile: "vs_5_0"
+        targets: [glsl300es]
+      - entry: "VSStretchConstraints"
+        profile: "vs_5_0"
+        targets: [glsl300es]
+      - entry: "VSRelaxation"
+        profile: "vs_5_0"
+        targets: [glsl300es]

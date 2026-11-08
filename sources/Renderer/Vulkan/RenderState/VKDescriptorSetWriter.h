@@ -9,7 +9,7 @@
 #define LLGL_VK_DESCRIPTOR_SET_WRITER_H
 
 
-#include <vulkan/vulkan.h>
+#include "../Vulkan.h"
 #include <vector>
 #include <cstdint>
 
@@ -46,7 +46,7 @@ class VKDescriptorSetWriter
         VkWriteDescriptorSet* NextWriteDescriptor();
         VkCopyDescriptorSet* NextCopyDescriptor();
 
-        // Returns the number of written descritpors.
+        // Returns the number of written descriptors.
         inline std::uint32_t GetNumWrites() const
         {
             return static_cast<std::uint32_t>(writes_.size());

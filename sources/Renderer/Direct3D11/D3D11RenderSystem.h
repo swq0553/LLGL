@@ -12,6 +12,7 @@
 #include <LLGL/RenderSystem.h>
 #include <LLGL/Container/ArrayView.h>
 
+#include "D3D11SharedDeviceObjects.h"
 #include "Command/D3D11CommandQueue.h"
 #include "Command/D3D11CommandBuffer.h"
 #include "D3D11SwapChain.h"
@@ -107,6 +108,12 @@ class D3D11RenderSystem final : public RenderSystem
             return tearingSupported_;
         }
 
+        // Returns a raw pointer to the shared device objects.
+        inline D3D11SharedDeviceObjects* GetSharedDeviceObjects()
+        {
+            return &sharedDeviceObjects_;
+        }
+
     private:
 
         #include <LLGL/Backend/RenderSystem.Internal.inl>
@@ -114,8 +121,8 @@ class D3D11RenderSystem final : public RenderSystem
     private:
 
         void CreateFactory();
-        void QueryVideoAdapters(long flags, ComPtr<IDXGIAdapter>& outPreferredAdatper);
-        HRESULT CreateDevice(IDXGIAdapter* adapter, bool isDebugDevice = false, bool isSoftwareDevice = false);
+        void QueryVideoAdapters(long flags, const LUID& preferredAdapterLuid, ComPtr<IDXGIAdapter>& outPreferredAdapter);
+        HRESULT CreateDevice(IDXGIAdapter* adapter, D3D_FEATURE_LEVEL minFeatureLevel, bool isDebugDevice = false, bool isSoftwareDevice = false);
         HRESULT CreateDeviceWithFlags(IDXGIAdapter* adapter, const ArrayView<D3D_FEATURE_LEVEL>& featureLevels, bool isSoftwareDevice = false, UINT flags = 0);
         HRESULT CreateDeviceWithFlagsAndDriverType(IDXGIAdapter* adapter, D3D_DRIVER_TYPE driverType, const ArrayView<D3D_FEATURE_LEVEL>& featureLevels, UINT flags);
         HRESULT QueryDXInterfacesFromNativeHandle(const Direct3D11::RenderSystemNativeHandle& nativeHandle);
@@ -162,7 +169,10 @@ class D3D11RenderSystem final : public RenderSystem
 
         ComPtr<IDXGIFactory>                    factory_;
 
-        #if LLGL_D3D11_ENABLE_FEATURELEVEL >= 1 || defined LLGL_OS_UWP
+        // OpenXR runtimes (e.g. SteamVR) require a DXGI 1.1 factory to enumerate and create the
+        // device on the LUID they hand back from xrGetD3D11GraphicsRequirementsKHR — base IDXGIFactory
+        // (DXGI 1.0) enumeration breaks shared-resource interop with the compositor.
+        #if LLGL_D3D11_ENABLE_FEATURELEVEL >= 1 || defined LLGL_OS_UWP || defined LLGL_BUILD_XR_OPENXR
         ComPtr<IDXGIFactory1>                   factory1_;
         #endif
 
@@ -191,6 +201,7 @@ class D3D11RenderSystem final : public RenderSystem
 
         std::shared_ptr<D3D11StateManager>      stateMngr_;
         std::vector<D3D11StateManager*>         deferredStateMngrRefs_;
+        D3D11SharedDeviceObjects                sharedDeviceObjects_;
 
         /* ----- Hardware object containers ----- */
 
@@ -213,7 +224,7 @@ class D3D11RenderSystem final : public RenderSystem
 
         /* ----- Other members ----- */
 
-        VideoAdapterInfo                        videoAdatperInfo_;
+        VideoAdapterInfo                        videoAdapterInfo_;
 
 };
 

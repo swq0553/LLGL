@@ -14,12 +14,15 @@ project(LLGL_Vulkan)
 
 # === Options ===
 
-if(NOT APPLE)
-    option(LLGL_VK_ENABLE_SPIRV_REFLECT "Enable shader reflection of SPIR-V modules (requires the SPIRV submodule)" OFF)
-endif()
+option(LLGL_VK_ENABLE_SPIRV_REFLECT "Enable shader reflection of SPIR-V modules (requires the SPIRV submodule)" OFF)
+option(LLGL_VK_ENABLE_GPU_ASSISTED_VALIDATION "Enable Vulkan GPU assisted validation" ON)
 
 if(LLGL_VK_ENABLE_SPIRV_REFLECT)
     ADD_DEFINE(LLGL_VK_ENABLE_SPIRV_REFLECT)
+endif()
+
+if(LLGL_VK_ENABLE_GPU_ASSISTED_VALIDATION)
+    ADD_DEFINE(LLGL_VK_ENABLE_GPU_ASSISTED_VALIDATION)
 endif()
 
 
@@ -61,6 +64,11 @@ if(APPLE)
     list(APPEND FilesVK ${FilesRendererVKPlatform})
 endif()
 
+if(LLGL_BUILD_XR_OPENXR)
+    find_source_files(FilesRendererVKOpenXR CXX "${PROJECT_SOURCE_DIR}/OpenXR")
+    list(APPEND FilesVK ${FilesRendererVKOpenXR})
+endif()
+
 
 # === Source group folders ===
 
@@ -75,6 +83,7 @@ source_group("Vulkan\\Platform"     FILES ${FilesRendererVKPlatform})
 source_group("Vulkan\\RenderState"  FILES ${FilesRendererVKRenderState})
 source_group("Vulkan\\Shader"       FILES ${FilesRendererVKShader})
 source_group("Vulkan\\Texture"      FILES ${FilesRendererVKTexture})
+source_group("Vulkan\\OpenXR"       FILES ${FilesRendererVKOpenXR})
 source_group("Include\\Platform"    FILES ${FilesIncludeVK})
 
 
@@ -92,15 +101,15 @@ if(LLGL_BUILD_RENDERER_VULKAN)
     # Vulkan Renderer
     if(LLGL_ANDROID_PLATFORM)
         add_llgl_module(LLGL_Vulkan LLGL_BUILD_RENDERER_VULKAN "${FilesVK}")
-        
+
         target_link_libraries(LLGL_Vulkan LLGL vulkan)
     else()
         find_package(Vulkan REQUIRED)
         if(Vulkan_FOUND)
             include_directories(${Vulkan_INCLUDE_DIR})
-            
+
             add_llgl_module(LLGL_Vulkan LLGL_BUILD_RENDERER_VULKAN "${FilesVK}")
-            
+
             target_link_libraries(LLGL_Vulkan LLGL ${Vulkan_LIBRARY})
 
             if(APPLE)
@@ -109,6 +118,15 @@ if(LLGL_BUILD_RENDERER_VULKAN)
         else()
             message(FATAL_ERROR "LLGL_BUILD_RENDERER_VULKAN failed: missing Vulkan libraries")
         endif()
+    endif()
+
+    if(LLGL_BUILD_XR_OPENXR)
+        # XR-Vk glue files need OpenXR headers and the loader (for xrGetInstanceProcAddr and the
+        # core swap-chain entry points). The XR_USE_* platform/API opt-ins are handled by
+        # sources/XR/OpenXR/OpenXRPlatform.h based on the build environment.
+        # Use the plain target_link_libraries form for consistency with the existing usages above.
+        target_link_libraries(LLGL_Vulkan ${OPENXR_HEADER_TARGET} ${OPENXR_LOADER_TARGET})
+        target_compile_definitions(LLGL_Vulkan PRIVATE LLGL_BUILD_XR_OPENXR)
     endif()
 endif()
 

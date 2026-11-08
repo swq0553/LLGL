@@ -67,7 +67,7 @@ class D3D12CommandContext
 
         D3D12CommandContext(D3D12Device& device);
 
-        // Creats the command list and internal command allocators.
+        // Creates the command list and internal command allocators.
         void Create(
             D3D12Device&            device,
             D3D12_COMMAND_LIST_TYPE commandListType         = D3D12_COMMAND_LIST_TYPE_DIRECT,
@@ -114,6 +114,18 @@ class D3D12CommandContext
             DXGI_FORMAT     format
         );
 
+        #if LLGL_D3D12_ENABLE_FEATURELEVEL >= 1
+        // Resolves the entire subresource with the specified mode. Requires ID3D12GraphicsCommandList1.
+        void ResolveSubresourceRegion(
+            D3D12Resource&      dstResource,
+            UINT                dstSubresource,
+            D3D12Resource&      srcResource,
+            UINT                srcSubresource,
+            DXGI_FORMAT         format,
+            D3D12_RESOLVE_MODE  resolveMode
+        );
+        #endif
+
         void CopyTextureRegion(
             D3D12Resource&      dstResource,
             UINT                dstSubresource,
@@ -155,13 +167,23 @@ class D3D12CommandContext
 
         void SetIndexBuffer(const D3D12_INDEX_BUFFER_VIEW& indexBufferView);
 
+        #if LLGL_D3D12_ENABLE_FEATURELEVEL >= 1
+
+        void SetShadingRate(D3D12_SHADING_RATE baseShadingRate, const D3D12_SHADING_RATE_COMBINER* combiners);
+
+        // Resets the shading rate to its default value for PSOs that do not enable it.
+        void ResetShadingRate();
+
+        #endif // /LLGL_D3D12_ENABLE_FEATURELEVEL >= 1
+
         D3D12_CPU_DESCRIPTOR_HANDLE GetCPUDescriptorHandle(D3D12_DESCRIPTOR_HEAP_TYPE type, UINT descriptor) const;
 
         D3D12_GPU_DESCRIPTOR_HANDLE CopyDescriptorsForStaging(
             D3D12_DESCRIPTOR_HEAP_TYPE  type,
             D3D12_CPU_DESCRIPTOR_HANDLE srcDescHandle,
             UINT                        firstDescriptor,
-            UINT                        numDescriptors
+            UINT                        numDescriptors,
+            bool*                       outIsDescriptorHeapDirty = nullptr
         );
 
         void EmplaceDescriptorForStaging(Resource& resource, const D3D12DescriptorHeapLocation& descriptorLocation);
@@ -266,15 +288,16 @@ class D3D12CommandContext
                 std::uint32_t   graphicsRootSignature   : 1;
                 std::uint32_t   computeRootSignature    : 1;
                 std::uint32_t   descriptorHeaps         : 1;
+                std::uint32_t   shadingRate1x1          : 1;
             }
-            dirtyBits;
+            dirtyBits = {};
 
             struct
             {
                 std::uint32_t   isDeferredPSO           : 1;
                 std::uint32_t   is16BitIndexFormat      : 1;
             }
-            stateBits;
+            stateBits = {};
 
             ID3D12RootSignature*    graphicsRootSignature                   = nullptr;
             ID3D12RootSignature*    computeRootSignature                    = nullptr;
@@ -327,7 +350,10 @@ class D3D12CommandContext
 
         ComPtr<ID3D12GraphicsCommandList>       commandList_;
         #if LLGL_D3D12_ENABLE_FEATURELEVEL >= 1
-        ComPtr<ID3D12GraphicsCommandList6>      commandList6_;
+        ComPtr<ID3D12GraphicsCommandList1>      commandList1_; // Resolve subresource region
+      //ComPtr<ID3D12GraphicsCommandList4>      commandList4_; // Ray-Tracing (DXR)
+        ComPtr<ID3D12GraphicsCommandList5>      commandList5_; // Variable Rate Shading (VRS)
+        ComPtr<ID3D12GraphicsCommandList6>      commandList6_; // Mesh Pipeline
         #endif
 
         D3D12_RESOURCE_BARRIER                  resourceBarriers_[maxNumResourceBarrieres];

@@ -42,7 +42,7 @@ namespace LLGL
 /*
 
 The internal buffer of GLResourceHeap is tightly packed which stores all segments of binding points consecutively.
-Here is an illustration of the buffer layout for one Texture resouce (at binding point 4) and two Sampler resources (at binding points 5 and 6) on a 32-bit build:
+Here is an illustration of the buffer layout for one Texture resource (at binding point 4) and two Sampler resources (at binding points 5 and 6) on a 32-bit build:
 
 Offset      Attribute                              Value   Description                                         Segment
 ----------------------------------------------------------------------------------------------------------------------------------------
@@ -127,7 +127,7 @@ LLGL_ASSERT_POD_TYPE(GLResourceHeapSegment);
 // Returns true if the specified buffer view is enabled for OpenGL bindings
 static bool IsGLBufferViewEnabled(const BufferViewDescriptor& bufferViewDesc)
 {
-    /* For OpenGL buffer binding, only the range is relevant, no format is considerd */
+    /* For OpenGL buffer binding, only the range is relevant, no format is considered */
     return (bufferViewDesc.size != LLGL_WHOLE_SIZE);
 }
 
@@ -137,8 +137,8 @@ static bool IsGLBufferViewEnabled(const BufferViewDescriptor& bufferViewDesc)
  */
 
 GLResourceHeap::GLResourceHeap(
-    const ResourceHeapDescriptor&               desc,
-    const ArrayView<ResourceViewDescriptor>&    initialResourceViews)
+    const ResourceHeapDescriptor&       desc,
+    ArrayView<ResourceViewDescriptor>   initialResourceViews)
 {
     /* Get pipeline layout object */
     auto pipelineLayoutGL = LLGL_CAST(const GLPipelineLayout*, desc.pipelineLayout);
@@ -187,7 +187,7 @@ GLResourceHeap::~GLResourceHeap()
     FreeAllSegmentsTextureViews();
 }
 
-std::uint32_t GLResourceHeap::WriteResourceViews(std::uint32_t firstDescriptor, const ArrayView<ResourceViewDescriptor>& resourceViews)
+std::uint32_t GLResourceHeap::WriteResourceViews(std::uint32_t firstDescriptor, ArrayView<ResourceViewDescriptor> resourceViews)
 {
     /* Quit if there's nothing to do */
     if (resourceViews.empty())
@@ -533,7 +533,7 @@ void GLResourceHeap::AllocSegmentsBuffer(GLHeapBindingIterator& bindingIter)
     );
 }
 
-void GLResourceHeap::AllocSegmentsTexture(GLHeapBindingIterator& bindingIter, const ArrayView<GLuint>& combinedSamplerSlots)
+void GLResourceHeap::AllocSegmentsTexture(GLHeapBindingIterator& bindingIter, ArrayView<GLuint> combinedSamplerSlots)
 {
     /* If native samplers are not supported, all texture bindings are handled via the emulated sampler bindings; see AllocSegmentsEmulatedSampler() */
     if (!HasNativeSamplers())
@@ -561,7 +561,7 @@ void GLResourceHeap::AllocSegmentsImage(GLHeapBindingIterator& bindingIter)
     );
 }
 
-void GLResourceHeap::AllocSegmentsSampler(GLHeapBindingIterator& bindingIter, const ArrayView<GLuint>& combinedSamplerSlots)
+void GLResourceHeap::AllocSegmentsSampler(GLHeapBindingIterator& bindingIter, ArrayView<GLuint> combinedSamplerSlots)
 {
     if (HasNativeSamplers())
         AllocSegmentsNativeSampler(bindingIter, combinedSamplerSlots);
@@ -569,7 +569,7 @@ void GLResourceHeap::AllocSegmentsSampler(GLHeapBindingIterator& bindingIter, co
         AllocSegmentsEmulatedSampler(bindingIter, combinedSamplerSlots);
 }
 
-void GLResourceHeap::AllocSegmentsNativeSampler(GLHeapBindingIterator& bindingIter, const ArrayView<GLuint>& combinedSamplerSlots)
+void GLResourceHeap::AllocSegmentsNativeSampler(GLHeapBindingIterator& bindingIter, ArrayView<GLuint> combinedSamplerSlots)
 {
     /* Collect all samplers */
     auto bindingSlots = FilterAndSortGLBindingSlots(bindingIter, ResourceType::Sampler, 0, combinedSamplerSlots);
@@ -581,7 +581,7 @@ void GLResourceHeap::AllocSegmentsNativeSampler(GLHeapBindingIterator& bindingIt
     );
 }
 
-void GLResourceHeap::AllocSegmentsEmulatedSampler(GLHeapBindingIterator& bindingIter, const ArrayView<GLuint>& combinedSamplerSlots)
+void GLResourceHeap::AllocSegmentsEmulatedSampler(GLHeapBindingIterator& bindingIter, ArrayView<GLuint> combinedSamplerSlots)
 {
     /* Collect all textures with sampled binding */
     auto textureBindingSlots = FilterAndSortGLBindingSlots(bindingIter, ResourceType::Texture, BindFlags::Sampled, combinedSamplerSlots);
@@ -1015,10 +1015,10 @@ void GLResourceHeap::WriteResourceViewEmulatedSampler(const ResourceViewDescript
 }
 
 std::vector<GLResourceHeap::GLResourceBinding> GLResourceHeap::FilterAndSortGLBindingSlots(
-    GLHeapBindingIterator&      bindingIter,
-    ResourceType                resourceType,
-    long                        resourceBindFlags,
-    const ArrayView<GLuint>&    combinedSamplerSlots)
+    GLHeapBindingIterator&  bindingIter,
+    ResourceType            resourceType,
+    long                    resourceBindFlags,
+    ArrayView<GLuint>       combinedSamplerSlots)
 {
     /* Collect all binding points of the specified resource type */
     bindingIter.Reset(resourceType, resourceBindFlags);
@@ -1070,8 +1070,8 @@ std::vector<GLResourceHeap::GLResourceBinding> GLResourceHeap::FilterAndSortGLBi
 }
 
 GLResourceHeap::SegmentationSizeType GLResourceHeap::ConsolidateSegments(
-    const ArrayView<GLResourceBinding>& bindingSlots,
-    const AllocSegmentFunc&             allocSegmentFunc)
+    ArrayView<GLResourceBinding>    bindingSlots,
+    const AllocSegmentFunc&         allocSegmentFunc)
 {
     return ConsolidateConsecutiveSequences<SegmentationSizeType>(
         bindingSlots.begin(),

@@ -29,7 +29,6 @@ namespace LLGL
 class PipelineLayout;
 class PipelineCache;
 class GLStateManager;
-class GLShaderProgram;
 
 // GL uniform location with size and type information.
 struct GLUniformLocation
@@ -50,7 +49,9 @@ class GLPipelineState : public PipelineState
             bool                        isGraphicsPSO,
             const PipelineLayout*       pipelineLayout,
             PipelineCache*              pipelineCache,
-            const ArrayView<Shader*>&   shaders
+            ArrayView<Shader*>          shaders,
+            ArrayView<VertexAttribute>  inputVertexAttribs  = {},
+            ArrayView<VertexAttribute>  outputVertexAttribs = {}
         );
         ~GLPipelineState();
 
@@ -58,6 +59,9 @@ class GLPipelineState : public PipelineState
 
         // Binds this pipeline state with the specified GL state manager.
         virtual void Bind(GLStateManager& stateMngr);
+
+        // Binds only the shader pipeline for the specified permutation. This must only be called with a valid permutation for this PSO.
+        void BindShaderPipeline(GLStateManager& stateMngr, GLShader::Permutation permutation);
 
         // Returns true if this is a graphics PSO.
         inline bool IsGraphicsPSO() const
@@ -71,7 +75,7 @@ class GLPipelineState : public PipelineState
             return pipelineLayout_;
         }
 
-        // Returns the shader pipeline used for this PSO.
+        // Returns the shader pipeline used for this PSO. This only returns the default permutation.
         inline const GLShaderPipeline* GetShaderPipeline() const
         {
             return shaderPipelines_[GLShader::PermutationDefault].get();
@@ -93,6 +97,12 @@ class GLPipelineState : public PipelineState
         inline GLbitfield GetBarriersBitfield() const
         {
             return barriers_;
+        }
+
+        // Returns true if this PSO has the specified shader permutation.
+        inline bool HasPermutation(GLShader::Permutation permutation) const
+        {
+            return (shaderPipelines_[permutation].get() != nullptr);
         }
 
     protected:
@@ -117,7 +127,7 @@ class GLPipelineState : public PipelineState
     private:
 
         // Builds the index-to-uniform map.
-        void BuildUniformMap(GLShader::Permutation permutation, const std::vector<UniformDescriptor>& uniforms);
+        void BuildUniformMap(const std::vector<UniformDescriptor>& uniforms);
 
         // Builds the container that maps a name to the index of its active GL uniform.
         void BuildNameToActiveUniformMap(GLuint program, GLNameToUniformMap& outNameToUniformMap);
@@ -130,15 +140,25 @@ class GLPipelineState : public PipelineState
             const GLNameToUniformMap&   nameToUniformMap
         );
 
+#if 0 //TODO: integrate this into GetUniformMap() in both immediate and deferred GL command buffers
+        // Returns the offset into the uniform map for the specified shader permutation.
+        inline std::uint32_t GetPermutationUniformIndex(GLShader::Permutation permutation) const
+        {
+            const std::size_t permutationIndex = static_cast<std::size_t>(permutation);
+            return (permutationIndex > 0 ? permutationUniformMapOffset_[permutationIndex - 1] : 0);
+        }
+#endif
+
     private:
 
-        const bool                      isGraphicsPSO_                                  = false;
-        GLbitfield                      barriers_                                       = 0;
-        const GLPipelineLayout*         pipelineLayout_                                 = nullptr;
+        const bool                      isGraphicsPSO_                                                  = false;
+        GLbitfield                      barriers_                                                       = 0;
+        const GLPipelineLayout*         pipelineLayout_                                                 = nullptr;
         GLShaderPipelineSPtr            shaderPipelines_[GLShader::PermutationCount];
         GLShaderBindingLayoutSPtr       shaderBindingLayout_;
         GLShaderBufferInterfaceMap      bufferInterfaceMap_;
         std::vector<GLUniformLocation>  uniformMap_;
+        std::uint32_t                   permutationUniformMapOffset_[GLShader::PermutationCount - 1]    = {};
         Report                          report_;
 
 };

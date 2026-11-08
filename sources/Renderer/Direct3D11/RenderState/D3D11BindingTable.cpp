@@ -19,11 +19,12 @@ namespace LLGL
 
 
 D3D11BindingTable::D3D11BindingTable(const ComPtr<ID3D11DeviceContext>& context) :
-    context_        { context },
-    omUAVStartSlot_ { ~0u     },
-    omNumUAVs_      { 0       },
-    omUAVDirtyBit_  { 0       }
+    context_        { context                 },
+    omUAVStartSlot_ { kInvalidUAVStartBitmask },
+    omNumUAVs_      { 0                       },
+    omUAVDirtyBit_  { 0                       }
 {
+    LLGL_ASSERT_PTR(context);
 }
 
 void D3D11BindingTable::SetVertexBuffer(
@@ -37,9 +38,9 @@ void D3D11BindingTable::SetVertexBuffer(
     {
         EvictAllOutputBindings(locator);
         PutVertexBuffer(locator, startSlot);
+        vbCount_ = std::max<UINT>(vbCount_, startSlot + 1);
     }
     context_->IASetVertexBuffers(startSlot, 1, &buffer, &stride, &offset);
-    vbCount_ = 1;
 }
 
 void D3D11BindingTable::SetVertexBuffers(
@@ -61,9 +62,9 @@ void D3D11BindingTable::SetVertexBuffers(
                 PutVertexBuffer(locators[i], startSlot + i);
             }
         }
+        vbCount_ = std::max<UINT>(vbCount_, startSlot + count);
     }
     context_->IASetVertexBuffers(startSlot, count, buffers, strides, offsets);
-    vbCount_ = count;
 }
 
 void D3D11BindingTable::SetIndexBuffer(
@@ -89,7 +90,10 @@ void D3D11BindingTable::SetStreamOutputBuffers(
     if (locators != nullptr)
     {
         for_range(i, count)
+        {
+            EvictAllBindings(locators[i]);
             PutStreamOutputBuffer(locators[i], i);
+        }
         for_subrange(i, count, soCount_)
             RemoveWholeResourceOutput(so_.locators, D3D11BindingLocator::D3DOutput_SO, i);
         soCount_ = count;
@@ -266,7 +270,7 @@ void D3D11BindingTable::ClearState()
     vbCount_        = 0;
     soCount_        = 0;
     rtvCount_       = 0;
-    omUAVStartSlot_ = ~0u;
+    omUAVStartSlot_ = kInvalidUAVStartBitmask;
     omNumUAVs_      = 0;
     omUAVDirtyBit_  = 0;
 }
@@ -291,6 +295,14 @@ void D3D11BindingTable::NotifyResourceRelease(D3D11BindingLocator* locator)
  * ======= Private: =======
  */
 
+static_assert(
+    D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT >= D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT,
+    "D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT is expected to be greater than or equal to D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT"
+);
+static_assert(
+    D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT >= D3D11_1_UAV_SLOT_COUNT,
+    "D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT is expected to be greater than or equal to D3D11_1_UAV_SLOT_COUNT"
+);
 static void* const g_nullArray[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT] = {};
 
 template <typename T>
@@ -1090,16 +1102,20 @@ void D3D11BindingTable::BindCachedOutputMergerUAVs()
 {
     /* Leading null UAVs must not override RTV slots, so start UAV range at least after number of RTVs */
     const UINT uavStartSlot = std::max<UINT>(rtvCount_, omUAVStartSlot_);
-    const UINT uavCount     = omNumUAVs_ - (uavStartSlot - omUAVStartSlot_);
-    context_->OMSetRenderTargetsAndUnorderedAccessViews(
-        /*NumRTVs:*/                D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL,
-        /*ppRenderTargetViews:*/    nullptr,
-        /*pDepthStencilView:*/      nullptr,
-        /*UAVStartSlot:*/           uavStartSlot,
-        /*NumUAVs:*/                uavCount,
-        /*ppUnorderedAccessViews:*/ &(uavOMRefs_[uavStartSlot]),
-        /*pUAVInitialCounts:*/      &(uavOMInitialCounts_[uavStartSlot])
-    );
+    const UINT uavRangeEnd = omNumUAVs_ + omUAVStartSlot_;
+    if (uavStartSlot < uavRangeEnd)
+    {
+        const UINT uavCount = uavRangeEnd - uavStartSlot;
+        context_->OMSetRenderTargetsAndUnorderedAccessViews(
+            /*NumRTVs:*/                D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL,
+            /*ppRenderTargetViews:*/    nullptr,
+            /*pDepthStencilView:*/      nullptr,
+            /*UAVStartSlot:*/           uavStartSlot,
+            /*NumUAVs:*/                uavCount,
+            /*ppUnorderedAccessViews:*/ &(uavOMRefs_[uavStartSlot]),
+            /*pUAVInitialCounts:*/      &(uavOMInitialCounts_[uavStartSlot])
+        );
+    }
 }
 
 

@@ -33,6 +33,11 @@ Canvas::~Canvas()
 
 /* ----- Canvas EventListener class ----- */
 
+bool Canvas::EventListener::IsConsumeEventsEnabled() const
+{
+    return true; // All events are consumed by default
+}
+
 void Canvas::EventListener::OnInit(Canvas& sender)
 {
     // dummy
@@ -53,14 +58,16 @@ void Canvas::EventListener::OnResize(Canvas& sender, const Extent2D& clientAreaS
     // dummy
 }
 
-void Canvas::EventListener::OnTapGesture(Canvas& sender, const Offset2D& position, std::uint32_t numTouches)
+LLGL_DEPRECATED_IGNORE_PUSH()
+
+void Canvas::EventListener::OnTapGesture(Canvas& sender, Offset2D position, std::uint32_t touchIndex, std::uint32_t numTouches)
 {
-    // dummy
+    OnTapGesture(sender, position, numTouches);
 }
 
-void Canvas::EventListener::OnPanGesture(Canvas& sender, const Offset2D& position, std::uint32_t numTouches, float dx, float dy, EventAction action)
+void Canvas::EventListener::OnPanGesture(Canvas& sender, Offset2D position, std::uint32_t touchIndex, std::uint32_t numTouches, float dx, float dy, EventAction action)
 {
-    // dummy
+    OnPanGesture(sender, position, numTouches, dx, dy, action);
 }
 
 void Canvas::EventListener::OnKeyDown(Canvas& sender, Key keyCode)
@@ -73,11 +80,50 @@ void Canvas::EventListener::OnKeyUp(Canvas& sender, Key keyCode)
     // dummy
 }
 
+void Canvas::EventListener::OnDoubleClick(Canvas& sender, Key keyCode)
+{
+    // dummy
+}
+
+void Canvas::EventListener::OnWheelMotion(Canvas& sender, float dx, float dy)
+{
+    // dummy
+}
+
+void Canvas::EventListener::OnMouseMotion(Canvas& sender, Offset2D position, float dx, float dy)
+{
+    // dummy
+}
+
+// DEPRECATED
+void Canvas::EventListener::OnTapGesture(Canvas& sender, const Offset2D& position, std::uint32_t numTouches)
+{
+    // dummy
+}
+
+void Canvas::EventListener::OnPanGesture(Canvas& sender, const Offset2D& position, std::uint32_t numTouches, float dx, float dy, EventAction action)
+{
+    // dummy
+}
+// /DEPRECATED
+
+LLGL_DEPRECATED_IGNORE_POP()
+
 
 /* ----- Window class ----- */
 
-#define FOREACH_LISTENER_CALL(FUNC) \
-    for (const auto& lst : pimpl_->eventListeners) { lst->FUNC; }
+#define FOREACH_LISTENER_CALL(FUNC)                     \
+    [&]() -> bool                                       \
+    {                                                   \
+        bool isConsumed = false;                        \
+        for (const auto& lst : pimpl_->eventListeners)  \
+        {                                               \
+            lst->FUNC;                                  \
+            if (lst->IsConsumeEventsEnabled())          \
+                isConsumed = true;                      \
+        }                                               \
+        return isConsumed;                              \
+    }()
 
 #ifndef LLGL_MOBILE_PLATFORM
 
@@ -140,25 +186,41 @@ void Canvas::PostResize(const Extent2D& clientAreaSize)
     FOREACH_LISTENER_CALL( OnResize(*this, clientAreaSize) );
 }
 
-void Canvas::PostTapGesture(const Offset2D& position, std::uint32_t numTouches)
+bool Canvas::PostTapGesture(Offset2D position, std::uint32_t touchIndex, std::uint32_t numTouches)
 {
-    FOREACH_LISTENER_CALL( OnTapGesture(*this, position, numTouches) );
+    return FOREACH_LISTENER_CALL( OnTapGesture(*this, position, touchIndex, numTouches) );
 }
 
-void Canvas::PostPanGesture(const Offset2D& position, std::uint32_t numTouches, float dx, float dy, EventAction action)
+bool Canvas::PostPanGesture(Offset2D position, std::uint32_t touchIndex, std::uint32_t numTouches, float dx, float dy, EventAction action)
 {
-    FOREACH_LISTENER_CALL( OnPanGesture(*this, position, numTouches, dx, dy, action) );
+    return FOREACH_LISTENER_CALL( OnPanGesture(*this, position, touchIndex, numTouches, dx, dy, action) );
 }
 
-void Canvas::PostKeyDown(Key keyCode)
+bool Canvas::PostKeyDown(Key keyCode)
 {
-    FOREACH_LISTENER_CALL( OnKeyDown(*this, keyCode) );
+    return FOREACH_LISTENER_CALL( OnKeyDown(*this, keyCode) );
 }
 
-void Canvas::PostKeyUp(Key keyCode)
+bool Canvas::PostKeyUp(Key keyCode)
 {
-    FOREACH_LISTENER_CALL( OnKeyUp(*this, keyCode) );
+    return FOREACH_LISTENER_CALL( OnKeyUp(*this, keyCode) );
 }
+
+bool Canvas::PostDoubleClick(Key keyCode)
+{
+    return FOREACH_LISTENER_CALL( OnDoubleClick(*this, keyCode) );
+}
+
+bool Canvas::PostWheelMotion(float dx, float dy)
+{
+    return FOREACH_LISTENER_CALL( OnWheelMotion(*this, dx, dy) );
+}
+
+bool Canvas::PostMouseMotion(Offset2D position, float dx, float dy)
+{
+    return FOREACH_LISTENER_CALL( OnMouseMotion(*this, position, dx, dy) );
+}
+
 
 #undef FOREACH_LISTENER_CALL
 

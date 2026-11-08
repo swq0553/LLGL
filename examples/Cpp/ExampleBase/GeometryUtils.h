@@ -19,6 +19,20 @@
  * Global helper structures
  */
 
+enum MeshFlags
+{
+    MeshFlags_KeepRightHandedCoordinates    = (1 << 0),
+    MeshFlags_Triangulate                   = (1 << 1),
+    MeshFlags_FlipTexCoordU                 = (1 << 2),
+    MeshFlags_FlipTexCoordV                 = (1 << 3),
+};
+
+struct ColoredVertex
+{
+    Gs::Vector3f position;
+    Gs::Vector3f color;
+};
+
 struct TexturedVertex
 {
     Gs::Vector3f position;
@@ -34,7 +48,7 @@ struct TangentSpaceVertex
     Gs::Vector2f texCoord;
 };
 
-//TODO: rename to ModelView, since this can also be used for quad primitives and does not contain any vertex data
+//TODO: rename to MeshView, since this can also be used for quad primitives and does not contain any vertex data
 struct TriangleMesh
 {
     std::uint32_t       firstVertex = 0;
@@ -43,26 +57,55 @@ struct TriangleMesh
     LLGL::ColorRGBAf    color;
 };
 
+struct Ray3f
+{
+    Gs::Vector3f origin, direction;
+
+    inline Gs::Vector3f Interpolate(float t) const
+    {
+        return origin + direction * t;
+    }
+};
+
+template <typename T>
+struct AABB
+{
+    T bbMin, bbMax;
+};
+
+using AABB3f = AABB<Gs::Vector3f>;
+
+struct AABBIntersection
+{
+    float           interpolator = 0.0f;
+    Gs::Vector3i    normal;
+};
+
 
 /*
  * Global helper functions
  */
 
 // Loads the vertices with position and normal from the specified Wavefront OBJ model file.
-std::vector<TexturedVertex> LoadObjModel(const std::string& filename);
+std::vector<TexturedVertex> LoadObjModel(const std::string& filename, unsigned verticesPerFace = 3, long flags = 0);
 
 // Loads the vertices with position and normal from the specified Wavefront OBJ model file.
-TriangleMesh LoadObjModel(std::vector<TexturedVertex>& vertices, const std::string& filename, unsigned verticesPerFace = 3);
+// This format is defined to have right-handed coordinates, but the default coordinate system in the LLGL examples is left-handed,
+// so unless 'keepRightHandedCoordinates' is true, the coordinates are transformed into left-handed coordinates (i.e. negate Z-axis).
+TriangleMesh LoadObjModel(std::vector<TexturedVertex>& vertices, const std::string& filename, unsigned verticesPerFace = 3, long flags = 0);
 
 // Generates eight vertices for a unit cube.
-std::vector<Gs::Vector3f> GenerateCubeVertices();
+std::vector<Gs::Vector3f> GenerateCubeVertices(bool isRightHanded = false);
 
 // Generates 36 indices for a unit cube of 8 vertices
 // (36 = 3 indices per triangle * 2 triangles per cube face * 6 faces).
 std::vector<std::uint32_t> GenerateCubeTriangleIndices();
 
+// Generates 24 vertices for a unit cube with per-vertex colors.
+std::vector<ColoredVertex> GenerateColoredCubeVertices(bool isRightHanded = false);
+
 // Generates 24 vertices for a unit cube with texture coordinates.
-std::vector<TexturedVertex> GenerateTexturedCubeVertices();
+std::vector<TexturedVertex> GenerateTexturedCubeVertices(bool isRightHanded = false);
 
 // Generates 36 indices for a unit cube of 24 vertices
 std::vector<std::uint32_t> GenerateTexturedCubeTriangleIndices();
@@ -79,6 +122,12 @@ std::vector<TangentSpaceVertex> GenerateTangentSpaceQuadVertices(const LLGL::Arr
 
 // Returns a point on the specified line segment that is the closest to the reference point.
 Gs::Vector3f ClosestPointOnLineSegment(const Gs::Vector3f& linePointA, const Gs::Vector3f& linePointB, const Gs::Vector3f& referencePoint);
+
+// Returns the interpolation factor for an intersection between a ray and an axis-aligned bounding box (AABB).
+bool IntersectRayWithAABB(const Ray3f& ray, const AABB3f& aabb, AABBIntersection* outIntersection = nullptr);
+
+// Returns the ray interpolation for an intersection between the ray and the plane.
+bool IntersectRayWithPlane(const Ray3f& ray, const Gs::Vector3f& planeNormal, float planeDistance, float* outInterpolator = nullptr);
 
 
 #endif

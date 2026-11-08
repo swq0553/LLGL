@@ -44,13 +44,14 @@ DEF_TEST( ViewportAndScissor )
     // Create graphics PSOs with and without scissor tests
     GraphicsPipelineDescriptor psoDesc;
     {
-        psoDesc.pipelineLayout                  = layouts[PipelineSolid];
-        psoDesc.renderPass                      = swapChain->GetRenderPass();
-        psoDesc.vertexShader                    = shaders[VSSolid];
-        psoDesc.fragmentShader                  = shaders[PSSolid];
-        psoDesc.depth.testEnabled               = true;
-        psoDesc.depth.writeEnabled              = true;
-        psoDesc.rasterizer.cullMode             = CullMode::Back;
+        psoDesc.pipelineLayout      = layouts[PipelineSolid];
+        psoDesc.renderPass          = swapChain->GetRenderPass();
+        psoDesc.inputVertexAttribs  = vertexFormats[VertFmtStd].attributes;
+        psoDesc.vertexShader        = shaders[VSSolid];
+        psoDesc.fragmentShader      = shaders[PSSolid];
+        psoDesc.depth.testEnabled   = true;
+        psoDesc.depth.writeEnabled  = true;
+        psoDesc.rasterizer.cullMode = CullMode::Back;
     }
     CREATE_GRAPHICS_PSO(psoNoScissor, psoDesc, "psoNoScissor");
     {
@@ -96,7 +97,7 @@ DEF_TEST( ViewportAndScissor )
 
     const IndexedTriangleMesh& mesh = models[ModelRect];
 
-    cmdBuffer->Begin();
+    BEGIN();
     {
         // Graphics can be set inside and outside a render pass, so test binding this PSO outside the render pass
         cmdBuffer->SetVertexBuffer(*meshBuffer);
@@ -130,7 +131,7 @@ DEF_TEST( ViewportAndScissor )
             cmdBuffer->EndRenderPass();
         }
     }
-    cmdBuffer->End();
+    END();
 
     auto EvaluateCapturePoint = [this](Texture* capture, std::int32_t x, std::int32_t y, const Gs::Vector4f& expectedColor, const char* colorBufferName) -> TestResult
     {
